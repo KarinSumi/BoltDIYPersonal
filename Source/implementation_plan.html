@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ClaudeClaw - Implementation Plan</title>
+<style>
+  :root{
+    --bg:#0b0f14;
+    --panel:#11161d;
+    --line:#1c2430;
+    --text:#e6edf7;
+    --muted:#7d8a9a;
+    --accent:#ffd866;
+    --accent2:#7ee787;
+    --danger:#ff7b72;
+    --ok:#a5d6ff;
+    --chip:#1b2432;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  header{padding:22px 24px;border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(11,15,20,.82);backdrop-filter:blur(8px);z-index:10}
+  header h1{margin:0;font-size:18px;letter-spacing:1.2px}
+  header p{margin:6px 0 0;color:var(--muted);font-size:12px}
+  .wrap{display:grid;grid-template-columns:260px 1fr;min-height:calc(100vh - 110px)}
+  nav{padding:18px;border-right:1px solid var(--line);position:sticky;top:62px;height:calc(100vh - 62px);overflow:auto}
+  nav a{display:block;color:#cdd6e4;text-decoration:none;padding:6px 8px;border-radius:6px;font-size:12px;border:1px solid transparent}
+  nav a:hover{background:var(--chip);border-color:var(--line)}
+  main{padding:22px 24px 60px}
+  section{scroll-margin-top:64px}
+  h2{font-size:14px;color:var(--accent);margin:28px 0 10px;display:flex;align-items:center;gap:10px}
+  h2 span{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;border:1px solid color-mix(in oklab, var(--accent) 60%, transparent);color:var(--accent);font-size:11px}
+  h3{font-size:12px;color:#c8d1dc;margin:14px 0 6px;font-weight:500}
+  ul{margin:6px 0 0 8px;padding-left:18px;color:#dce4ef}
+  li{margin:6px 0;font-size:12.5px;line-height:1.55}
+  .grid{display:grid;gap:12px;margin-top:10px}
+  .col-2{grid-template-columns:repeat(2,1fr)}
+  .col-3{grid-template-columns:repeat(3,1fr)}
+  .tile{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .tile h4{margin:0 0 6px;font-size:12px;color:var(--accent2)}
+  .tile p{margin:0;color:#cfd8e3;font-size:12px}
+  .pill{display:inline-flex;align-items:center;gap:6px;background:var(--chip);border:1px solid var(--line);color:#e6edf7;padding:4px 8px;border-radius:999px;font-size:11px}
+  .done{color:var(--accent2)}.warn{color:var(--accent)}.err{color:var(--danger)}.info{color:var(--ok)}
+  .row{display:flex;flex-wrap:wrap;gap:10px;margin:10px 0}
+  .checklist{list-style:none;padding:0;margin:10px 0}
+  .checklist li{display:flex;gap:8px;align-items:flex-start}
+  .checklist li::before{content:" ";margin-top:3px}
+  .ok::before{content:"—" } .warn::before{content:"—"} .err::before{content:"—"}
+</style>
+</head>
+<body>
+<header>
+  <h1>CLAUDE<span style="color:var(--accent)">CLAW</span> — Implementation Plan</h1>
+  <p>Review the tasks and decisions below. This document is based on the Blueprint files in D:\Agy-Hermes\Blueprint.</p>
+  <div class="row">
+    <span class="pill info">Scope: <strong>Read-only synthesis</strong></span>
+    <span class="pill warn">Decision point: platform + voice + memory + features + advanced options</span>
+    <span class="pill">File: <code>D:\Agy-Hermes\Blueprint\implementation_plan.html</code></span>
+  </div>
+</header>
+<div class="wrap">
+<nav>
+  <a href="#overview">Overview</a>
+  <a href="#decisions">Required decisions</a>
+  <a href="#architecture">Architecture</a>
+  <a href="#tasks">Tasks & subtasks</a>
+  <a href="#bootstrap">Bootstrap</a>
+  <a href="#core">Core runtime</a>
+  <a href="#platform">Platform</a>
+  <a href="#voice">Voice</a>
+  <a href="#memory">Memory</a>
+  <a href="#multiagent">Multi-agent</a>
+  <a href="#warroom">War Room</a>
+  <a href="#security">Security</a>
+  <a href="#dashboard">Dashboard</a>
+  <a href="#mission">Mission Control</a>
+  <a href="#whatsapp">WhatsApp</a>
+  <a href="#entry">Entrypoint</a>
+  <a href="#ops">Setup & ops</a>
+  <a href="#verification">Verification</a>
+  <a href="#milestones">Milestones</a>
+</nav>
+<main>
+<section id="overview">
+<h2><span>1</span>Overview</h2>
+<ul>
+  <li>Product: ClaudeClaw — personal AI assistant controlled from Telegram/Discord/iMessage.</li>
+  <li>Core behavior: bridges chat messages to a local Claude Code CLI subprocess using the Claude Code SDK.</li>
+  <li>Key behaviors: session resumption, typing indicator, media handling, optional voice.</li>
+  <li>Extensible via modular Power Packs: Memory v2, Multi-Agent, War Room, Mission Control, Security, Dashboard, Meeting Bot, WhatsApp.</li>
+  <li>Primary risks: Windows service workflow, dependency completeness, and path-handling correctness.</li>
+</ul>
+</section>
+
+<section id="decisions">
+<h2><span>2</span>Required user decisions</h2>
+<p class="row">
+  <span class="pill warn">Review before implementation to avoid overbuilding or building the wrong thing.</span>
+</p>
+<div class="grid col-3">
+  <div class="tile">
+    <h4>Q1 Platform</h4>
+    <p><code>telegram</code> (recommended), <code>discord</code>, or <code>imessage</code> (Mac only).</p>
+  </div>
+  <div class="tile">
+    <h4>Q2 Voice</h4>
+    <p><code>none</code> or STT:<code>stt_groq</code>,<code>stt_openai</code> and TTS:<code>tts_elevenlabs</code>,<code>tts_kokoro_local</code>.</p>
+  </div>
+  <div class="tile">
+    <h4>Q3 Memory</h4>
+    <p><code>simple</code>, <code>full_v2</code>, or <code>none</code>. full_v2 requires GOOGLE_API_KEY.</p>
+  </div>
+  <div class="tile">
+    <h4>Q4 Optional features</h4>
+    <p><code>scheduler</code>, <code>whatsapp</code>, <code>video</code>, <code>service</code>, <code>multiuser</code>.</p>
+  </div>
+  <div class="tile">
+    <h4>Q5 Multi-agent</h4>
+    <p><code>no</code> or <code>yes_with_templates</code> (Main, Comms, Content, Ops, Research).</p>
+  </div>
+  <div class="tile">
+    <h4>Q6 Advanced</h4>
+    <p><code>none</code> or <code>war_room</code>, <code>meeting_bot</code>, <code>dashboard</code>, <code>security</code>.</p>
+  </div>
+</div>
+</section>
+
+<section id="architecture">
+<h2><span>3</span>Architecture summary</h2>
+<p class="row">
+  <span class="pill info">Message queue -> security gate -> classifier -> memory injection -> Agent SDK -> exfiltration guard -> response format -> send</span>
+</p>
+<pre style="background:var(--panel);border:1px solid var(--line);padding:14px;border-radius:10px;font-size:12px;color:#cdd6e4;overflow:auto">
+Channel (Telegram / Discord / iMessage / Dashboard / War Room)
+    |
+    v
+Message Queue + State + Abort controllers
+    |
+    v
+Security Gate (auth, PIN if enabled)
+    |
+    v
+Classifier: simple vs complex (opt-in)
+    |
+    v
+Memory Injection: 5-layer retrieval + Obsidian context
+    |
+    v
+Claude Code SDK (subprocess with cwd, resume session, permissionMode: bypassPermissions)
+    |
+    v
+Exfiltration Guard (regex scan + redact)
+    |
+    v
+Formatter (Markdown to allowed HTML for Telegram, or platform-native)
+    |
+    v
+Sender (text/voice/media)
+</pre>
+</section>
+
+<section id="tasks">
+<h2><span>4</span>Tasks and subtasks</h2>
+<h3 id="sub-bootstrap">4.1 Bootstrap and repo structure</h3>
+<ul>
+  <li>Create project files: <code>.gitignore</code>, <code>package.json</code>, <code>tsconfig.json</code>.</li>
+  <li>Run <code>npm install</code> for selected feature set.</li>
+  <li>Create runtime directories: <code>store/</code>, <code>workspace/uploads/</code>.</li>
+  <li>Validate local <code>claude</code> CLI availability and authentication.</li>
+</ul>
+
+<h3 id="sub-core">4.2 Core runtime</h3>
+<ul>
+  <li>Implement <code>src/env.ts</code> robust parser using only <code>fileURLToPath</code> for path resolution.</li>
+  <li>Implement <code>src/logger.ts</code> with <code>pino</code> plus optional <code>pino-pretty</code> transport in development.</li>
+  <li>Implement <code>src/config.ts</code> exporting named constants (36-46+ env exports) and runtime constants.</li>
+  <li>Implement <code>src/db.ts</code> with WAL mode, inline migrations using <code>PRAGMA table_info()</code> checks.</li>
+  <li>Implement <code>src/agent.ts</code> with <code>query()</code> wrapper, typing callback, session extraction, token tracking for cost footer.</li>
+  <li>Implement <code>src/errors.ts</code>, <code>src/state.ts</code>, <code>src/message-queue.ts</code>, <code>src/cost-footer.ts</code>.</li>
+</ul>
+
+<h3 id="sub-platform">4.3 Platform integration</h3>
+<ul>
+  <li><code>grammy</code> Telegram bot implementation with text, voice, document, photo, video handlers.</li>
+  <li>Markdown-to-Telegram-HTML formatter.</li>
+  <li>Discord or iMessage variant if selected.</li>
+  <li>Auth flow: <code>/chatid</code> discovery, allowlist enforcement.</li>
+</ul>
+
+<h3 id="sub-voice">4.4 Voice</h3>
+<ul>
+  <li>Speech-to-text via Groq Whisper/OpenAI Whisper.</li>
+  <li>Text-to-speech via ElevenLabs with fallback chain (Kokoro, macOS say).</li>
+  <li>File handling: rename <code>.oga</code> to <code>.ogg</code> for Groq.</li>
+  <li>Per-chat voice toggle with force voice reply behavior.</li>
+</ul>
+
+<h3 id="sub-memory">4.5 Memory</h3>
+<ul>
+  <li><code>simple</code>: last N turns in SQLite.</li>
+  <li><code>full_v2</code>: extraction via Gemini, embeddings via Gemini, duplicate detection, consolidation, 5-layer retrieval, decay, nudging, relevance feedback.</li>
+  <li>Adjust implementation order from <code>db.ts</code> schema to <code>memory.ts</code> and ingestion/consolidation modules.</li>
+</ul>
+
+<h3 id="sub-multiagent">4.6 Multi-agent</h3>
+<ul>
+  <li>Agent registry and per-agent session isolation via composite primary key.</li>
+  <li>Orchestrator with <code>@agentId:</code> parsing and delegation hooks.</li>
+  <li>Agent lifecycle: activate, deactivate, restart, delete.</li>
+  <li>Hive mind and inter-agent task tables.</li>
+</ul>
+
+<h3 id="sub-warroom">4.7 War Room</h3>
+<ul>
+  <li>Pipecat server on port 7860 with live/legacy modes.</li>
+  <li>GoT personas, routing rules, agent bridge in Python and Node.</li>
+  <li>Browser UI bundle and embedded HTML refs.</li>
+</ul>
+
+<h3 id="sub-security">4.8 Security</h3>
+<ul>
+  <li>PIN lock + idle auto-lock + kill phrase.</li>
+  <li>Exfiltration guard with regex patterns for API keys, base64, URL-encoded secrets.</li>
+  <li>Audit logging and blocked-event tracking.</li>
+</ul>
+
+<h3 id="sub-dashboard">4.9 Dashboard</h3>
+<ul>
+  <li>Hono API server on port 3141 with token auth.</li>
+  <li>Embedded HTML dashboard for memory, agents, missions, hive mind, war room management.</li>
+</ul>
+
+<h3 id="sub-mission">4.10 Mission control and scheduler</h3>
+<ul>
+  <li>Cron scheduler with stuck-task recovery and 60s polling.</li>
+  <li>Priority async mission queue with optional Gemini auto-assignment.</li>
+</ul>
+
+<h3 id="sub-whatsapp">4.11 WhatsApp bridge</h3>
+<ul>
+  <li><code>whatsapp-web.js</code> client with outbox queue and QR onboarding.</li>
+  <li>Separate daemon process lifecycle and signal handling.</li>
+</ul>
+
+<h3 id="sub-entry">4.12 Entrypoint and lifecycle</h3>
+<ul>
+  <li>Startup sequence, PID lock, graceful shutdown, background service integration.</li>
+  <li>Windows lifecycle guidance with PM2 instructions.</li>
+</ul>
+
+<h3 id="sub-ops">4.13 Setup and operations</h3>
+<ul>
+  <li>Interactive wizard for API key collection, service installation, chat-ID discovery.</li>
+  <li>Status script and CLAUDE.md templating.</li>
+</ul>
+
+<h3 id="sub-verification">4.14 Verification</h3>
+<ul>
+  <li>Typecheck, build, unit/integration tests.</li>
+  <li>Manual smoke test checklist for each enabled feature.</li>
+</ul>
+</section>
+
+<section id="bootstrap">
+<h2><span>5</span>Milestones</h2>
+<h3>M1 Bootstrap</h3>
+<ul class="checklist">
+  <li class="ok">Repo files created</li>
+  <li class="ok">Dependencies installed</li>
+  <li class="warn">Local Claude CLI verified</li>
+</ul>
+<h3>M2 Core</h3>
+<ul class="checklist">
+  <li class="warn">Env/config/db/agent working</li>
+  <li class="warn">Basic end-to-end Telegram message roundtrip</li>
+  <li class="err">Session persistence proven</li>
+</ul>
+<h3>M3 Optional features</h3>
+<ul class="checklist">
+  <li class="warn">Voice or Memory v2 landed per user selection</li>
+  <li class="err">Security and Dashboard only if selected</li>
+</ul>
+<h3>M4 Go live</h3>
+<ul class="checklist">
+  <li class="warn">Status checks passing</li>
+  <li class="warn">Background service installed</li>
+  <li class="err">User review sign-off</li>
+</ul>
+</section>
+
+<section id="open-questions">
+<h2><span>6</span>Open questions</h2>
+<ol>
+  <li>Which platform do you want as the primary channel?</li>
+  <li>Which voice features, if any, should be enabled?</li>
+  <li>Should I implement the <code>simple</code> or <code>full_v2</code> memory model?</li>
+  <li>Do you want multi-agent with the five default templates?</li>
+  <li>Which advanced packs should I include?</li>
+</ol>
+</section>
+
+<section id="next">
+<h2><span>7</span>Next step</h2>
+<p>Review this plan and reply with your choices. After confirmation, start implementation based on your selected feature set.</p>
+</section>
+</main>
+</div>
+</body>
+</html>

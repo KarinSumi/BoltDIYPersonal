@@ -1,0 +1,47 @@
+{
+  "name": "opencode-os",
+  "version": "1.0.0",
+  "description": "OpenCode OS — personal AI assistant accessible via Telegram with Memory v2, Multi-Agent, War Room, Mission Control, Security, Dashboard, Voice, and Meeting Bot",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "setup": "tsx scripts/setup.ts",
+    "status": "tsx scripts/status.ts",
+    "schedule": "tsx src/schedule-cli.ts",
+    "mission": "tsx src/mission-cli.ts",
+    "agent:create": "tsx src/agent-create-cli.ts",
+    "agent:start": "tsx src/index.ts",
+    "meet": "tsx src/meet-cli.ts",
+    "warroom:bundle": "npx esbuild warroom/client.js --bundle --outfile=warroom/client.bundle.js --format=esm",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "pm2:start": "pm2 start dist/index.js --name opencode-os",
+    "pm2:stop": "pm2 stop opencode-os",
+    "pm2:logs": "pm2 logs opencode-os"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.0.0",
+    "cron-parser": "^4.9.0",
+    "glob": "^13.0.6",
+    "grammy": "^1.26.0",
+    "hono": "^4.0.0",
+    "js-yaml": "^4.1.0",
+    "openai": "^4.50.0",
+    "pino": "^9.0.0",
+    "pino-pretty": "^11.0.0",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20.14.0",
+    "@types/uuid": "^10.0.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}

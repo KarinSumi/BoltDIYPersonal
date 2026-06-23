@@ -1,0 +1,4 @@
+pipecat-ai[websocket,deepgram,cartesia,silero]
+fastapi
+uvicorn
+python-dotenv

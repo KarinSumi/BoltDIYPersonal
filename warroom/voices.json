@@ -1,0 +1,27 @@
+{
+  "main": {
+    "title": "Hand of the King",
+    "cartesia_voice_id": "a0e99841-438c-4a64-b679-ae501e7d6091",
+    "gemini_voice": "Charon"
+  },
+  "research": {
+    "title": "Grand Maester",
+    "cartesia_voice_id": "79a125e8-cd45-4c13-8a67-188112f4dd22",
+    "gemini_voice": "Kore"
+  },
+  "comms": {
+    "title": "Master of Whisperers",
+    "cartesia_voice_id": "b7d50908-b17c-442d-ad8d-810c63997ed9",
+    "gemini_voice": "Aoede"
+  },
+  "content": {
+    "title": "Royal Bard",
+    "cartesia_voice_id": "c8f144b8-208f-4057-ab12-a1c4c2f74b68",
+    "gemini_voice": "Leda"
+  },
+  "ops": {
+    "title": "Master of War",
+    "cartesia_voice_id": "726d5ae5-055f-4c3d-8355-d9677c2e1b3f",
+    "gemini_voice": "Alnilam"
+  }
+}
