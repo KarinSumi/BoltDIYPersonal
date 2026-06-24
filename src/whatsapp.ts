@@ -1,28 +1,49 @@
-// WhatsApp Bridge — uses whatsapp-web.js for browser automation
-// Import and use in index.ts when WHATSAPP_ENABLED is set
-
+import { v4 as uuid } from 'uuid'
 import { logger } from './logger.js'
+import { insertMission } from './db.js'
 
-export interface WhatsAppConfig {
-  sessionPath: string
-  onIncomingMessage: (chatId: string, message: string) => Promise<void>
+interface WhatsAppMessage {
+  id: string
+  from: string
+  body: string
+  timestamp: number
 }
 
-export async function initWhatsApp(config: WhatsAppConfig): Promise<void> {
-  logger.info('WhatsApp bridge initialization placeholder')
+type MessageHandler = (msg: WhatsAppMessage) => void
 
-  // In production, this would:
-  // 1. Launch Puppeteer with whatsapp-web.js
-  // 2. Scan QR code for first-time auth
-  // 3. Listen for incoming messages and forward via onIncomingMessage
-  // 4. Maintain a message outbox queue in SQLite
+let messageHandler: MessageHandler | null = null
 
-  console.log(`
-WhatsApp Bridge requires whatsapp-web.js.
+export function setMessageHandler(handler: MessageHandler): void {
+  messageHandler = handler
+}
 
-To enable:
-  1. npm install whatsapp-web.js qrcode-terminal
-  2. Set WHATSAPP_ENABLED=true in .env
-  3. On first run, scan the QR code displayed in terminal
-`)
+export async function sendMessage(to: string, text: string): Promise<boolean> {
+  insertMission({
+    id: uuid(),
+    title: `WhatsApp to ${to}`,
+    prompt: `Send a WhatsApp message to ${to}: ${text}`,
+    assigned_agent: 'comms',
+    priority: 3,
+  })
+  logger.info({ to }, 'WhatsApp message queued')
+  return true
+}
+
+export function handleIncoming(from: string, body: string): void {
+  const msg: WhatsAppMessage = {
+    id: uuid(),
+    from,
+    body,
+    timestamp: Date.now(),
+  }
+
+  if (messageHandler) {
+    messageHandler(msg)
+  }
+
+  logger.info({ from, body: body.slice(0, 100) }, 'WhatsApp message received')
+}
+
+export function formatWhatsAppMessage(msg: WhatsAppMessage): string {
+  return `[WhatsApp from ${msg.from}]\n${msg.body}`
 }

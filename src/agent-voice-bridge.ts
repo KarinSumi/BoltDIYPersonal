@@ -1,58 +1,82 @@
-#!/usr/bin/env node
-import { parseArgs } from 'util'
-import { initDatabase } from './db.js'
-import { PROJECT_ROOT } from './config.js'
+import { initDatabase, getSession, setSession, clearSession } from './db.js'
+import { queryAgent } from './opencode-agent.js'
 import { logger } from './logger.js'
 
-async function main() {
-  const args = parseArgs({
-    args: process.argv.slice(2),
-    options: {
-      agent: { type: 'string' },
-      message: { type: 'string' },
-      'chat-id': { type: 'string', default: 'warroom' },
-      quick: { type: 'boolean', default: false },
+interface BridgeArgs {
+  agent: string
+  message: string
+  chatId: string
+  quick: boolean
+}
+
+function parseArgs(): BridgeArgs {
+  const args = process.argv.slice(2)
+  const parsed: Record<string, string> = {}
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i].startsWith('--')) {
+      const key = args[i].slice(2)
+      const next = args[i + 1]
+      if (next && !next.startsWith('--')) {
+        parsed[key] = next
+        i++
+      } else {
+        parsed[key] = 'true'
+      }
     }
-  })
-
-  const agentId = args.values.agent || 'main'
-  const message = args.values.message
-  const chatId = args.values['chat-id']
-  const quick = args.values.quick
-
-  if (!message) {
-    console.log(JSON.stringify({ response: null, usage: null, error: 'No message provided' }))
-    process.exit(0)
   }
 
-  if (!/^[a-z][a-z0-9_-]{0,29}$/.test(agentId)) {
+  return {
+    agent: parsed['agent'] || 'main',
+    message: parsed['message'] || '',
+    chatId: parsed['chat-id'] || 'warroom',
+    quick: parsed['quick'] === 'true',
+  }
+}
+
+async function main(): Promise<void> {
+  const args = parseArgs()
+
+  if (!/^[a-z][a-z0-9_-]{0,29}$/.test(args.agent)) {
     console.log(JSON.stringify({ response: null, usage: null, error: 'Invalid agent ID' }))
     process.exit(0)
   }
 
   try {
     initDatabase()
+  } catch (err) {
+    console.log(JSON.stringify({ response: null, usage: null, error: `DB init error: ${(err as Error).message}` }))
+    process.exit(0)
+  }
 
-    const prompt = quick
-      ? `War Room auto-routing: The user is in a voice meeting and this answer will be read aloud verbatim. Respond in 1-2 short sentences.\n\n${message}`
-      : message
+  let prompt = args.message
+  if (args.quick) {
+    prompt = `War Room auto-routing: The user is in a voice meeting and this answer will be read aloud verbatim. Respond in 1-2 short sentences.\n\nUser: ${args.message}`
+  }
 
-    const { queryAgent } = await import('./opencode-agent.js')
+  try {
+    const sessionId = getSession(args.chatId, args.agent)
     const result = await queryAgent({
       messages: [{ role: 'user', content: prompt }],
-      agentId,
+      sessionId,
+      agentId: args.agent,
     })
 
-    const output = {
+    console.log(JSON.stringify({
       response: result.text,
       usage: { input_tokens: result.inputTokens, output_tokens: result.outputTokens },
       error: null,
-    }
-
-    console.log(JSON.stringify(output))
+    }))
   } catch (err) {
-    console.log(JSON.stringify({ response: null, usage: null, error: (err as Error).message }))
+    console.log(JSON.stringify({
+      response: null,
+      usage: null,
+      error: (err as Error).message,
+    }))
   }
 }
 
-main()
+main().catch((err) => {
+  console.log(JSON.stringify({ response: null, usage: null, error: (err as Error).message }))
+  process.exit(0)
+})

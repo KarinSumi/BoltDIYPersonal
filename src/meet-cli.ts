@@ -1,143 +1,109 @@
-#!/usr/bin/env node
 import { v4 as uuid } from 'uuid'
-import { existsSync, mkdirSync, writeFileSync } from 'fs'
-import { resolve } from 'path'
-import { GOOGLE_API_KEY, PIKA_API_KEY, RECALL_API_KEY, MEET_BRIEFS_DIR } from './config.js'
-import { insertMeetSession, updateMeetSessionStatus, listMeetSessions, getDb } from './db.js'
-import { initDatabase } from './db.js'
+import { initDatabase, insertMeetSession, updateMeetSessionStatus, getActiveMeetSessions, listMeetSessions } from './db.js'
 
-async function main() {
-  initDatabase()
-  const subcommand = process.argv[2]
+initDatabase()
 
-  switch (subcommand) {
-    case 'join':
-      await handleJoin()
-      break
-    case 'leave':
-      await handleLeave()
-      break
-    case 'list':
-      handleList()
-      break
-    default:
-      console.log('Usage: meet join|leave|list')
-      console.log('  meet join --meet-url URL --agent main [--bot-name NAME] [--provider pika|recall]')
-      console.log('  meet leave --session-id ID')
-      console.log('  meet list')
-  }
+const [cmd, ...args] = process.argv.slice(2)
 
-  process.exit(0)
+interface ParsedArgs {
+  [key: string]: string | undefined
 }
 
-async function handleJoin() {
-  const args = parseArgs(process.argv.slice(3))
-  const meetUrl = args['--meet-url']
-  const agentId = args['--agent'] || 'main'
-  const botName = args['--bot-name'] || 'OpenCode Bot'
-  const provider = args['--provider'] || 'pika'
-  const imagePath = args['--image']
-  const voiceId = args['--voice-id']
-  const autoBrief = args['--auto-brief'] !== 'false'
-
-  if (!meetUrl) {
-    console.log('Error: --meet-url is required')
-    return
+function parseArgs(input: string[]): ParsedArgs {
+  const out: ParsedArgs = {}
+  for (let i = 0; i < input.length; i++) {
+    if (input[i].startsWith('--')) {
+      const key = input[i].slice(2)
+      const value = input[i + 1] && !input[i + 1].startsWith('--') ? input[i + 1] : 'true'
+      out[key] = value
+      if (value !== 'true') i++
+    }
   }
-
-  const platform = meetUrl.includes('meet.google.com') ? 'google_meet' : 'zoom'
-
-  console.log(`Joining ${platform} meeting...`)
-  console.log(`  URL: ${meetUrl}`)
-  console.log(`  Agent: ${agentId}`)
-  console.log(`  Provider: ${provider}`)
-
-  if (autoBrief) {
-    console.log('Running pre-flight briefing...')
-    const briefing = await runBriefing(meetUrl, agentId)
-    console.log(`  Briefing saved to: ${briefing}`)
-  }
-
-  const sessionId = uuid()
-  insertMeetSession({ id: sessionId, agent_id: agentId, meet_url: meetUrl, bot_name: botName, platform, provider })
-
-  console.log(`\n✅ Session created: ${sessionId}`)
-  console.log(`   The bot is joining the meeting as "${botName}"`)
+  return out
 }
 
-async function handleLeave() {
-  const args = parseArgs(process.argv.slice(3))
-  const sessionId = args['--session-id']
-
-  if (!sessionId) {
-    console.log('Error: --session-id is required')
-    return
-  }
-
-  updateMeetSessionStatus(sessionId, 'ended')
-  console.log(`✅ Session ${sessionId} ended`)
+function detectPlatform(url: string): 'google_meet' | 'zoom' {
+  if (url.includes('meet.google.com')) return 'google_meet'
+  if (url.includes('zoom.us')) return 'zoom'
+  return 'google_meet'
 }
 
-function handleList() {
-  const sessions = listMeetSessions() as Array<{
-    id: string; agent_id: string; meet_url: string; platform: string; provider: string; status: string; created_at: string
-  }>
+async function runBriefing(meetUrl: string, attendees: string[]): Promise<string> {
+  console.log(`[Briefing] Preparing pre-flight briefing for ${meetUrl}...`)
+  console.log(`[Briefing] Attendees: ${attendees.join(', ') || 'unknown'}`)
 
-  if (sessions.length === 0) {
-    console.log('No meeting sessions.')
-    return
-  }
+  const briefId = uuid()
+  const briefPath = `outputs/meet_briefs/${briefId}_brief.md`
 
-  for (const s of sessions) {
-    console.log(`${s.id.slice(0, 8)} | ${s.agent_id} | ${s.platform} | ${s.provider} | ${s.status} | ${s.created_at}`)
-  }
-}
+  const briefContent = `# Meeting Briefing\n\n**URL:** ${meetUrl}\n**Attendees:** ${attendees.join(', ') || 'Unknown'}\n\n## Context\n\nPre-flight briefing generated. Meeting bot ready.`
 
-async function runBriefing(meetUrl: string, agentId: string): Promise<string> {
-  const dateDir = new Date().toISOString().slice(0, 10)
-  const briefDir = resolve(MEET_BRIEFS_DIR, dateDir)
-  if (!existsSync(briefDir)) mkdirSync(briefDir, { recursive: true })
+  const { writeFileSync, mkdirSync, existsSync } = await import('fs')
+  const { dirname } = await import('path')
+  const dir = dirname(briefPath)
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  writeFileSync(briefPath, briefContent, 'utf-8')
 
-  const briefPath = resolve(briefDir, `${uuid().slice(0, 8)}_brief.md`)
-
-  let briefing = '## Pre-Flight Briefing\n\n'
-
-  if (GOOGLE_API_KEY) {
-    try {
-      const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?orderBy=startTime&singleEvents=true&timeMin=${new Date().toISOString()}&key=${GOOGLE_API_KEY}`)
-      if (resp.ok) {
-        const data = await resp.json() as { items?: Array<{ summary: string }> }
-        if (data.items?.length) {
-          briefing += '### Upcoming Events\n'
-          for (const event of data.items.slice(0, 5)) {
-            briefing += `- ${event.summary}\n`
-          }
-          briefing += '\n'
-        }
-      }
-    } catch { /* Calendar fetch failed */ }
-  }
-
-  briefing += '### Meeting Context\n'
-  briefing += `- Meeting URL: ${meetUrl}\n`
-  briefing += `- Agent: ${agentId}\n`
-  briefing += `- Briefing generated: ${new Date().toISOString()}\n`
-
-  writeFileSync(briefPath, briefing, 'utf-8')
+  console.log(`[Briefing] Saved to ${briefPath}`)
   return briefPath
 }
 
-function parseArgs(args: string[]): Record<string, string> {
-  const result: Record<string, string> = {}
-  for (let i = 0; i < args.length; i++) {
-    if (args[i].startsWith('--') && i + 1 < args.length && !args[i + 1].startsWith('--')) {
-      result[args[i]] = args[i + 1]
-      i++
-    } else if (args[i].startsWith('--')) {
-      result[args[i]] = 'true'
+async function main(): Promise<void> {
+  switch (cmd) {
+    case 'join': {
+      const parsed = parseArgs(args)
+      const meetUrl = parsed['meet-url'] || parsed['url']
+      const botName = parsed['bot-name'] || 'OpenCode Bot'
+      const agentId = parsed['agent'] || 'main'
+      const provider = parsed['provider'] || 'pika'
+      const autoBrief = parsed['auto-brief'] !== 'false'
+
+      if (!meetUrl) {
+        console.error('Usage: meet-cli join --meet-url <url> [--agent main] [--provider pika]')
+        process.exit(1)
+      }
+
+      const platform = detectPlatform(meetUrl)
+      const sessionId = uuid()
+
+      if (autoBrief) {
+        const briefPath = await runBriefing(meetUrl, [])
+        insertMeetSession({ id: sessionId, agent_id: agentId, meet_url: meetUrl, bot_name: botName, platform, provider })
+        updateMeetSessionStatus(sessionId, 'active')
+        console.log(`\nSession ${sessionId} joined (${platform}, ${provider})`)
+        console.log(`Briefing: ${briefPath}`)
+      } else {
+        insertMeetSession({ id: sessionId, agent_id: agentId, meet_url: meetUrl, bot_name: botName, platform, provider })
+        updateMeetSessionStatus(sessionId, 'active')
+        console.log(`\nSession ${sessionId} joined (${platform}, ${provider})`)
+      }
+      break
     }
+
+    case 'leave': {
+      const parsed = parseArgs(args)
+      const sessionId = parsed['session-id'] || args[0]
+      if (!sessionId) {
+        console.error('Usage: meet-cli leave --session-id <id>')
+        process.exit(1)
+      }
+      updateMeetSessionStatus(sessionId, 'ended')
+      console.log(`Session ${sessionId} ended`)
+      break
+    }
+
+    case 'list': {
+      const sessions = listMeetSessions() as Array<{ id: string; meet_url: string; platform: string; status: string; provider: string; created_at: string }>
+      console.log('ID\t\tURL\t\tPlatform\tStatus\t\tProvider\tCreated')
+      for (const s of sessions) {
+        console.log(`${s.id.slice(0, 8)}\t${s.meet_url.slice(0, 30)}\t${s.platform}\t${s.status}\t${s.provider}\t${s.created_at}`)
+      }
+      break
+    }
+
+    default:
+      console.log('Usage: meet-cli <join|leave|list> [options]')
+      process.exit(1)
   }
-  return result
 }
 
 main().catch(console.error)

@@ -1,40 +1,37 @@
-import asyncio
-import json
 import subprocess
+import json
+import os
 from pathlib import Path
 
+PROJECT_ROOT = str(Path(__file__).parent.parent.resolve())
+BRIDGE_SCRIPT = os.path.join(PROJECT_ROOT, "dist", "agent-voice-bridge.js")
 
 async def invoke_agent(agent_id: str, prompt: str, chat_id: str = "warroom") -> str:
-    """Invoke an OpenCode OS agent via the Node.js voice bridge."""
-    project_root = Path(__file__).parent.parent
-
-    cmd = [
-        "node",
-        str(project_root / "dist" / "agent-voice-bridge.js"),
-        f"--agent={agent_id}",
-        f"--message={prompt}",
-        f"--chat-id={chat_id}",
-        "--quick",
-    ]
+    if not os.path.exists(BRIDGE_SCRIPT):
+        return f"Error: Agent bridge not built at {BRIDGE_SCRIPT}"
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(project_root),
-            env={"NODE_PATH": str(project_root / "node_modules"), **dict(process.env)}
+        result = subprocess.run(
+            ["node", BRIDGE_SCRIPT, "--agent", agent_id, "--message", prompt, "--chat-id", chat_id, "--quick"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=PROJECT_ROOT,
         )
 
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        output = result.stdout.strip()
+        if not output:
+            return f"Error: No output from agent bridge. Stderr: {result.stderr[:200]}"
 
-        if proc.returncode != 0:
-            return f"I'm sorry, I encountered an error. ({stderr.decode()[:200]})"
+        parsed = json.loads(output)
+        if parsed.get("error"):
+            return f"Agent error: {parsed['error']}"
 
-        result = json.loads(stdout.decode())
-        return result.get("response", "I'm sorry, I couldn't process that.")
+        return parsed.get("response", "No response")
 
-    except asyncio.TimeoutError:
-        return "I'm sorry, the request timed out."
-    except (json.JSONDecodeError, subprocess.CalledProcessError) as e:
-        return f"I'm sorry, I encountered an error. ({str(e)[:200]})"
+    except subprocess.TimeoutExpired:
+        return "Agent response timed out after 30 seconds."
+    except json.JSONDecodeError:
+        return f"Error parsing agent response: {output[:100]}"
+    except Exception as e:
+        return f"Agent bridge error: {str(e)}"
