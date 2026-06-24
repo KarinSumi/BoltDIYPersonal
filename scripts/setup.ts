@@ -61,8 +61,8 @@ async function main() {
   const token = await ask('Telegram bot token (from @BotFather)', process.env.TELEGRAM_BOT_TOKEN)
   const chatId = await ask('Your Telegram chat ID (send /chatid after setup)', process.env.ALLOWED_CHAT_ID)
   const apiKey = await ask('OpenCode API key (for model access)', process.env.OPENCODE_API_KEY)
-  const apiBase = await ask('OpenCode API base URL', process.env.OPENCODE_API_BASE_URL || 'https://api.deepseek.com')
-  const model = await ask('Model name', process.env.OPENCODE_MODEL || 'deepseek-v4-flash-free')
+  const apiBase = await ask('OpenAI-compatible API base URL', process.env.OPENCODE_API_BASE_URL || 'https://integrate.api.nvidia.com/v1')
+  const model = await ask('Model name', process.env.OPENCODE_MODEL || 'deepseek-ai/deepseek-v4-flash')
 
   // Write .env
   let envContent = `# OpenCode OS
