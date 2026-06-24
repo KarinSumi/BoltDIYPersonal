@@ -9,3 +9,9 @@ mcp_servers:
   - Bash
   - Grep
   - Glob
+capabilities:
+  - documentation and README writing
+  - code documentation and comments
+  - content summarization
+  - proofreading and editing
+  - report and changelog generation

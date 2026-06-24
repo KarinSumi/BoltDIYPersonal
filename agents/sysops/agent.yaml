@@ -9,3 +9,9 @@ mcp_servers:
   - Write
   - Glob
   - Grep
+capabilities:
+  - system administration
+  - file operations and management
+  - process and resource monitoring
+  - log analysis and troubleshooting
+  - deployment and configuration

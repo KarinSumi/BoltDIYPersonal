@@ -9,3 +9,9 @@ mcp_servers:
   - Read
   - Write
   - Bash
+capabilities:
+  - web research and fact-finding
+  - data analysis and synthesis
+  - current events and news
+  - competitive analysis
+  - source citation and verification

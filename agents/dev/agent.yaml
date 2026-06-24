@@ -9,3 +9,9 @@ mcp_servers:
   - Write
   - Grep
   - Glob
+capabilities:
+  - code review and debugging
+  - software architecture design
+  - writing and refactoring code
+  - dependency analysis
+  - programming in any language

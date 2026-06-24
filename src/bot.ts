@@ -6,7 +6,8 @@ import { enqueue } from './message-queue.js'
 import { formatCostFooter } from './cost-footer.js'
 import { logger } from './logger.js'
 import { voiceEnabledChats, chatEvents, abortControllers } from './state.js'
-import { isDelegationRequest, getAgent, listAgents } from './orchestrator.js'
+import { isDelegationRequest, getAgent, listAgents, buildAgentCatalog } from './orchestrator.js'
+import { classifyIntent } from './router.js'
 import { isLocked, lock, unlock, checkKillPhrase, resetIdleTimer } from './security.js'
 import { touchActivity } from './state.js'
 import { insertScheduledTask, insertMission, listScheduledTasks, listMissions } from './db.js'
@@ -111,7 +112,8 @@ export function createBot(): Bot {
       '/lock — Lock the system immediately\n' +
       '/voice — Toggle voice replies\n' +
       '/help — Show this message\n\n' +
-      'Use @agentname <message> to delegate to a specific agent.'
+      'Messages are auto-routed to the best agent.\n' +
+      'Use @agentname <message> to force-delegate to a specific agent.'
     )
   })
 
@@ -290,6 +292,15 @@ async function handleTextMessage(ctx: Context, chatId: string, text: string): Pr
   if (delegation) {
     agentId = delegation.agentId
     promptText = delegation.prompt
+  } else {
+    const catalog = buildAgentCatalog()
+    const routing = await classifyIntent(text, catalog)
+    if (routing.agentId !== 'main' && routing.confidence !== 'low') {
+      agentId = routing.agentId
+      promptText = routing.prompt
+      const targetName = getAgent(agentId)?.name || agentId
+      ctx.reply(`\u21b3 *Routing to ${targetName}...*`, { parse_mode: 'Markdown' }).catch(() => {})
+    }
   }
 
   try {

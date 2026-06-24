@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, readdirSync } from 'fs'
+import { readFileSync, existsSync, readdirSync, statSync } from 'fs'
 import { join } from 'path'
 import { PROJECT_ROOT } from './config.js'
 import { insertHiveEntry } from './db.js'
@@ -13,6 +13,7 @@ export interface AgentConfig {
   cwd: string
   mcpServers: string[]
   color?: string
+  capabilities?: string[]
 }
 
 const AGENT_COLORS = [
@@ -26,7 +27,7 @@ const agents = new Map<string, AgentConfig>()
 
 export function registerAgent(config: AgentConfig): void {
   if (agents.size >= 20) throw new Error('Maximum 20 agents allowed')
-  if (!/^[a-z][a-z0-9_-]{0,29}$/.test(config.id)) throw new Error('Invalid agent ID format')
+  if (!/^[a-z][a-z0-9/_-]{0,39}$/.test(config.id)) throw new Error('Invalid agent ID format')
   config.color = assignColor()
   agents.set(config.id, config)
 }
@@ -42,6 +43,18 @@ export function getAgent(id: string): AgentConfig | undefined {
       return cfg
     } catch { /* fallback */ }
   }
+
+  const parentPath = join(PROJECT_ROOT, 'agents', id.split('/')[0], 'agent.yaml')
+  if (existsSync(parentPath)) {
+    try {
+      const content = readFileSync(parentPath, 'utf-8')
+      const cfg = load(content) as AgentConfig
+      cfg.id = id
+      cfg.color = assignColor()
+      return cfg
+    } catch { /* fallback */ }
+  }
+
   return agents.get(id)
 }
 
@@ -51,28 +64,41 @@ export function assignColor(): string {
   return color
 }
 
-export function listAgents(): AgentConfig[] {
-  const result = Array.from(agents.values())
-  const agentsDir = join(PROJECT_ROOT, 'agents')
-  if (existsSync(agentsDir)) {
-    const entries = readdirSync(agentsDir, { withFileTypes: true })
-    for (const entry of entries) {
-      if (entry.isDirectory() && entry.name !== '_template') {
-        const cfg = getAgent(entry.name)
-        if (cfg && !result.find(a => a.id === cfg.id)) {
-          result.push(cfg)
-        }
+function scanAgentsDir(dir: string, prefix: string, result: AgentConfig[]): void {
+  if (!existsSync(dir)) return
+  const entries = readdirSync(dir, { withFileTypes: true })
+  for (const entry of entries) {
+    if (entry.name === '_template') continue
+    if (entry.isDirectory()) {
+      const agentId = prefix ? `${prefix}/${entry.name}` : entry.name
+      const cfg = getAgent(agentId)
+      if (cfg && !result.find(a => a.id === cfg.id)) {
+        result.push(cfg)
       }
+      scanAgentsDir(join(dir, entry.name), agentId, result)
     }
   }
+}
+
+export function listAgents(): AgentConfig[] {
+  const result = Array.from(agents.values())
+  scanAgentsDir(join(PROJECT_ROOT, 'agents'), '', result)
   return result
 }
 
+export function buildAgentCatalog(): Array<{ id: string; name: string; capabilities: string[] }> {
+  return listAgents().map(a => ({
+    id: a.id,
+    name: a.name,
+    capabilities: a.capabilities || [a.personality.slice(0, 100)],
+  }))
+}
+
 export function isDelegationRequest(text: string): { agentId: string; prompt: string } | null {
-  const atMatch = text.match(/^@(\w[\w-]*):?\s(.+)/)
+  const atMatch = text.match(/^@([\w][\w/-]*):?\s(.+)/)
   if (atMatch) return { agentId: atMatch[1], prompt: atMatch[2] }
 
-  const cmdMatch = text.match(/^\/delegate\s+(\w[\w-]*)\s+(.+)/)
+  const cmdMatch = text.match(/^\/delegate\s+([\w][\w/-]*)\s+(.+)/)
   if (cmdMatch) return { agentId: cmdMatch[1], prompt: cmdMatch[2] }
 
   return null
@@ -103,6 +129,7 @@ export function registerMainAgent(): void {
       personality: 'You are OpenCode OS Coordinator, the primary interface between the user and a team of specialist agents. Your job: handle general conversation, and when a task requires specialized skills, use @agent syntax in your response to suggest delegation. Available agents: dev (code), research (web research), sysops (system admin), writer (documentation). Respond concisely and helpfully.',
       cwd: '.',
       mcpServers: ['Bash', 'Read', 'Write', 'Grep', 'Glob', 'Web'],
+      capabilities: ['general chat', 'coordination', 'task routing'],
     })
   }
 }

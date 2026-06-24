@@ -1,6 +1,6 @@
 id: example-agent
 name: Example Agent
-model: deepseek-v4-flash-free
+model: deepseek-ai/deepseek-v4-flash
 personality: A helpful assistant focused on general tasks.
 cwd: .
 mcp_servers:
@@ -10,3 +10,6 @@ mcp_servers:
   - Edit
   - Grep
   - Glob
+capabilities:
+  - general tasks
+  - file operations
