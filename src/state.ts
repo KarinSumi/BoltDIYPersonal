@@ -23,7 +23,7 @@ export const voiceEnabledChats = new Set<string>()
 export const activeSessions = new Map<string, { startedAt: number; agentId?: string }>()
 export const abortControllers = new Map<string, AbortController>()
 
-export let isSystemLocked = true
+export let isSystemLocked = false
 export let lastActivityAt = Date.now()
 
 export function touchActivity(): void { lastActivityAt = Date.now() }

@@ -6,6 +6,8 @@ import { initDatabase, runSalienceDecay } from './db.js'
 import { createBot } from './bot.js'
 import { startDashboard } from './dashboard.js'
 import { initScheduler } from './scheduler.js'
+import { registerMainAgent } from './orchestrator.js'
+import { resetIdleTimer } from './security.js'
 import { startConsolidationLoop } from './memory-consolidate.js'
 import { logger } from './logger.js'
 
@@ -65,6 +67,8 @@ async function main(): Promise<void> {
   if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true })
 
   initDatabase()
+  registerMainAgent()
+  resetIdleTimer()
 
   runSalienceDecay()
   setInterval(() => runSalienceDecay(), 86400000)

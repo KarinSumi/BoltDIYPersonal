@@ -1,10 +1,12 @@
 #!/usr/bin/env tsx
 import { createInterface } from 'readline/promises'
 import { writeFileSync, existsSync, readFileSync, copyFileSync } from 'fs'
-import { resolve } from 'path'
+import { resolve, dirname } from 'path'
+import { fileURLToPath } from 'url'
 import { execSync } from 'child_process'
 
-const PROJECT_ROOT = resolve(import.meta.dirname, '..')
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const PROJECT_ROOT = resolve(__dirname, '..')
 const ENV_PATH = resolve(PROJECT_ROOT, '.env')
 const ENV_EXAMPLE_PATH = resolve(PROJECT_ROOT, '.env.example')
 

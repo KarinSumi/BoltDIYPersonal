@@ -1,10 +1,12 @@
 #!/usr/bin/env tsx
 import { execSync } from 'child_process'
 import { existsSync, readFileSync } from 'fs'
-import { resolve } from 'path'
+import { resolve, dirname } from 'path'
+import { fileURLToPath } from 'url'
 import { readEnvFile } from '../src/env.js'
 
-const PROJECT_ROOT = resolve(import.meta.dirname, '..')
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const PROJECT_ROOT = resolve(__dirname, '..')
 const GREEN = '\x1b[32m'
 const YELLOW = '\x1b[33m'
 const RED = '\x1b[31m'
@@ -55,7 +57,7 @@ async function main() {
   if (existsSync(dbPath)) {
     ok('Database exists')
     try {
-      const { DatabaseSync } = require('node:sqlite')
+      const { DatabaseSync } = await import('node:sqlite')
       const db = new DatabaseSync(dbPath)
       const count = db.prepare('SELECT COUNT(*) as c FROM memories').get() as { c: number }
       ok(`Memory entries: ${count.c}`)

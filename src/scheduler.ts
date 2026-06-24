@@ -1,4 +1,5 @@
-import { parseExpression } from 'cron-parser'
+import cronParser from 'cron-parser'
+const { parseExpression } = cronParser
 import { getDueTasks, markTaskRunning, updateTaskAfterRun, resetStuckTasks, getNextQueuedMission, completeMission } from './db.js'
 import { queryAgent } from './opencode-agent.js'
 import { logger } from './logger.js'

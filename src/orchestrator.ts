@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'fs'
+import { readFileSync, existsSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { PROJECT_ROOT } from './config.js'
 import { insertHiveEntry } from './db.js'
@@ -52,7 +52,20 @@ export function assignColor(): string {
 }
 
 export function listAgents(): AgentConfig[] {
-  return Array.from(agents.values())
+  const result = Array.from(agents.values())
+  const agentsDir = join(PROJECT_ROOT, 'agents')
+  if (existsSync(agentsDir)) {
+    const entries = readdirSync(agentsDir, { withFileTypes: true })
+    for (const entry of entries) {
+      if (entry.isDirectory() && entry.name !== '_template') {
+        const cfg = getAgent(entry.name)
+        if (cfg && !result.find(a => a.id === cfg.id)) {
+          result.push(cfg)
+        }
+      }
+    }
+  }
+  return result
 }
 
 export function isDelegationRequest(text: string): { agentId: string; prompt: string } | null {
@@ -79,4 +92,17 @@ export function deactivateAgent(id: string): boolean {
 
 export function deleteAgent(id: string): boolean {
   return agents.delete(id)
+}
+
+export function registerMainAgent(): void {
+  if (!agents.has('main')) {
+    registerAgent({
+      id: 'main',
+      name: 'Main Assistant',
+      model: 'deepseek-ai/deepseek-v4-flash',
+      personality: 'You are OpenCode OS Coordinator, the primary interface between the user and a team of specialist agents. Your job: handle general conversation, and when a task requires specialized skills, use @agent syntax in your response to suggest delegation. Available agents: dev (code), research (web research), sysops (system admin), writer (documentation). Respond concisely and helpfully.',
+      cwd: '.',
+      mcpServers: ['Bash', 'Read', 'Write', 'Grep', 'Glob', 'Web'],
+    })
+  }
 }

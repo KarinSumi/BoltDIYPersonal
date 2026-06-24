@@ -1,5 +1,6 @@
 import json
 import os
+import config
 
 def route_utterance(text: str, pinned_agent: str | None = None) -> str:
     text_lower = text.lower()
@@ -38,4 +39,4 @@ def read_pin() -> str | None:
     except (FileNotFoundError, json.JSONDecodeError):
         return None
 
-import config  # noqa: E402 — import after function definitions to avoid circular issues
+
