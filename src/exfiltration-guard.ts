@@ -15,12 +15,19 @@ const SECRET_PATTERNS: RegExp[] = [
   /-----BEGIN (?:RSA |EC |DSA )?PRIVATE KEY-----/g,
 ]
 
-function toBase64(str: string): string {
-  return Buffer.from(str).toString('base64')
-}
+const secretIndicators = ['KEY', 'TOKEN', 'SECRET', 'PASSWORD', 'API']
 
-function toUrlEncoded(str: string): string {
-  return encodeURIComponent(str)
+const envCache: Array<{ key: string; value: string; b64: string; urlEnc: string }> = []
+const envRaw = readEnvFile()
+for (const [key, value] of Object.entries(envRaw)) {
+  if (!secretIndicators.some(ind => key.toUpperCase().includes(ind))) continue
+  if (value.length < 8) continue
+  envCache.push({
+    key,
+    value,
+    b64: Buffer.from(value).toString('base64'),
+    urlEnc: encodeURIComponent(value),
+  })
 }
 
 export function scanForSecrets(text: string): { clean: string; leaked: string[] } {
@@ -38,27 +45,18 @@ export function scanForSecrets(text: string): { clean: string; leaked: string[] 
     }
   }
 
-  const env = readEnvFile()
-  for (const [key, value] of Object.entries(env)) {
-    const secretIndicators = ['KEY', 'TOKEN', 'SECRET', 'PASSWORD', 'API']
-    if (!secretIndicators.some(ind => key.toUpperCase().includes(ind))) continue
-    if (value.length < 8) continue
-
-    if (clean.includes(value)) {
-      clean = clean.replace(new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '[REDACTED]')
-      leaked.push(`env:${key}`)
+  for (const entry of envCache) {
+    if (clean.includes(entry.value)) {
+      clean = clean.replace(new RegExp(entry.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '[REDACTED]')
+      leaked.push(`env:${entry.key}`)
     }
-
-    const b64 = toBase64(value)
-    if (clean.includes(b64)) {
-      clean = clean.replace(new RegExp(b64.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '[REDACTED]')
-      leaked.push(`base64:${key}`)
+    if (clean.includes(entry.b64)) {
+      clean = clean.replace(new RegExp(entry.b64.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '[REDACTED]')
+      leaked.push(`base64:${entry.key}`)
     }
-
-    const urlEnc = toUrlEncoded(value)
-    if (clean.includes(urlEnc)) {
-      clean = clean.replace(new RegExp(urlEnc.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '[REDACTED]')
-      leaked.push(`url-encoded:${key}`)
+    if (clean.includes(entry.urlEnc)) {
+      clean = clean.replace(new RegExp(entry.urlEnc.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '[REDACTED]')
+      leaked.push(`url-encoded:${entry.key}`)
     }
   }
 

@@ -313,7 +313,7 @@ async function handleTextMessage(ctx: Context, chatId: string, text: string): Pr
 
     const recentTurns = getRecentTurns(chatId, agentId, 10) as Array<{ role: string; content: string }>
     const messages: AgentMessage[] = [
-      ...recentTurns.reverse().map(t => ({ role: t.role as 'user' | 'assistant', content: t.content })),
+      ...recentTurns.map(t => ({ role: t.role as 'user' | 'assistant', content: t.content })),
       { role: 'user', content: promptText }
     ]
 
@@ -327,6 +327,7 @@ async function handleTextMessage(ctx: Context, chatId: string, text: string): Pr
       sessionId,
       agentId,
       systemPrompt,
+      signal: abortController.signal,
     })
 
     abortControllers.delete(chatId)

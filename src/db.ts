@@ -384,7 +384,7 @@ export function insertTurn(chatId: string, role: 'user' | 'assistant', content: 
 }
 
 export function getRecentTurns(chatId: string, agentId = 'main', limit = 10): unknown[] {
-  return db.prepare('SELECT * FROM turns WHERE chat_id = ? AND agent_id = ? ORDER BY created_at DESC LIMIT ?').all(chatId, agentId, limit)
+  return db.prepare('SELECT * FROM (SELECT * FROM turns WHERE chat_id = ? AND agent_id = ? ORDER BY created_at DESC LIMIT ?) ORDER BY created_at ASC').all(chatId, agentId, limit)
 }
 
 export function pruneOldTurns(chatId: string, agentId = 'main', keep = 50): void {

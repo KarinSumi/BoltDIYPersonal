@@ -1,5 +1,4 @@
-import OpenAI from 'openai'
-import { OPENCODE_API_KEY, OPENCODE_API_BASE_URL, OPENCODE_MODEL } from './config.js'
+import { getClient, getModel } from './llm-client.js'
 import { logger } from './logger.js'
 
 export interface RoutingDecision {
@@ -31,14 +30,12 @@ export async function classifyIntent(
 ): Promise<RoutingDecision> {
   const fallback: RoutingDecision = { agentId: 'main', prompt: message, confidence: 'medium' }
 
-  if (!OPENCODE_API_KEY) {
+  if (!getClient()) {
     return fallback
   }
 
-  const client = new OpenAI({
-    apiKey: OPENCODE_API_KEY,
-    baseURL: OPENCODE_API_BASE_URL || undefined,
-  })
+  const client = getClient()
+  const model = getModel()
 
   const catalogText = agents.map(a =>
     `- ${a.id}: ${a.name} — ${a.capabilities.join(', ')}`
@@ -48,7 +45,7 @@ export async function classifyIntent(
 
   try {
     const completion = await client.chat.completions.create({
-      model: OPENCODE_MODEL,
+      model,
       messages: [
         { role: 'system', content: ROUTER_SYSTEM_PROMPT },
         { role: 'user', content: userPrompt },

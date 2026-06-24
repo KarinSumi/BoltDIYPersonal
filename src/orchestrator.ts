@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, readdirSync, statSync } from 'fs'
+import { readFileSync, existsSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { PROJECT_ROOT } from './config.js'
 import { insertHiveEntry } from './db.js'
@@ -24,6 +24,70 @@ const AGENT_COLORS = [
 
 let colorIndex = 0
 const agents = new Map<string, AgentConfig>()
+const diskAgentCache = new Map<string, AgentConfig>()
+let catalogCache: Array<{ id: string; name: string; capabilities: string[] }> | null = null
+
+function assignColor(): string {
+  const color = AGENT_COLORS[colorIndex % AGENT_COLORS.length]
+  colorIndex++
+  return color
+}
+
+function loadYamlAgent(agentId: string): AgentConfig | undefined {
+  const path = join(PROJECT_ROOT, 'agents', agentId, 'agent.yaml')
+  if (!existsSync(path)) return undefined
+  try {
+    const content = readFileSync(path, 'utf-8')
+    const cfg = load(content) as AgentConfig
+    cfg.id = agentId
+    cfg.color = assignColor()
+    return cfg
+  } catch {
+    return undefined
+  }
+}
+
+function scanAndCacheAgents(): void {
+  diskAgentCache.clear()
+  catalogCache = null
+  const dir = join(PROJECT_ROOT, 'agents')
+  if (!existsSync(dir)) return
+
+  const entries = readdirSync(dir, { withFileTypes: true })
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === '_template') continue
+    const cfg = loadYamlAgent(entry.name)
+    if (cfg) {
+      diskAgentCache.set(cfg.id, cfg)
+    }
+    scanSubAgents(entry.name)
+  }
+}
+
+function scanSubAgents(parentId: string): void {
+  const dir = join(PROJECT_ROOT, 'agents', parentId)
+  if (!existsSync(dir)) return
+  const entries = readdirSync(dir, { withFileTypes: true })
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === '_template') continue
+    const agentId = `${parentId}/${entry.name}`
+    const cfg = loadYamlAgent(agentId)
+    if (cfg) {
+      diskAgentCache.set(cfg.id, cfg)
+    }
+  }
+}
+
+export function getAgent(id: string): AgentConfig | undefined {
+  const disk = diskAgentCache.get(id)
+  if (disk) return disk
+
+  const parentId = id.split('/')[0]
+  const parent = diskAgentCache.get(parentId)
+  if (parent) return parent
+
+  return agents.get(id)
+}
 
 export function registerAgent(config: AgentConfig): void {
   if (agents.size >= 20) throw new Error('Maximum 20 agents allowed')
@@ -32,66 +96,29 @@ export function registerAgent(config: AgentConfig): void {
   agents.set(config.id, config)
 }
 
-export function getAgent(id: string): AgentConfig | undefined {
-  const externalPath = join(PROJECT_ROOT, 'agents', id, 'agent.yaml')
-  if (existsSync(externalPath)) {
-    try {
-      const content = readFileSync(externalPath, 'utf-8')
-      const cfg = load(content) as AgentConfig
-      cfg.id = id
-      cfg.color = assignColor()
-      return cfg
-    } catch { /* fallback */ }
-  }
-
-  const parentPath = join(PROJECT_ROOT, 'agents', id.split('/')[0], 'agent.yaml')
-  if (existsSync(parentPath)) {
-    try {
-      const content = readFileSync(parentPath, 'utf-8')
-      const cfg = load(content) as AgentConfig
-      cfg.id = id
-      cfg.color = assignColor()
-      return cfg
-    } catch { /* fallback */ }
-  }
-
-  return agents.get(id)
-}
-
-export function assignColor(): string {
-  const color = AGENT_COLORS[colorIndex % AGENT_COLORS.length]
-  colorIndex++
-  return color
-}
-
-function scanAgentsDir(dir: string, prefix: string, result: AgentConfig[]): void {
-  if (!existsSync(dir)) return
-  const entries = readdirSync(dir, { withFileTypes: true })
-  for (const entry of entries) {
-    if (entry.name === '_template') continue
-    if (entry.isDirectory()) {
-      const agentId = prefix ? `${prefix}/${entry.name}` : entry.name
-      const cfg = getAgent(agentId)
-      if (cfg && !result.find(a => a.id === cfg.id)) {
-        result.push(cfg)
-      }
-      scanAgentsDir(join(dir, entry.name), agentId, result)
-    }
-  }
-}
-
 export function listAgents(): AgentConfig[] {
   const result = Array.from(agents.values())
-  scanAgentsDir(join(PROJECT_ROOT, 'agents'), '', result)
+  for (const cfg of diskAgentCache.values()) {
+    if (!result.find(a => a.id === cfg.id)) {
+      result.push(cfg)
+    }
+  }
   return result
 }
 
 export function buildAgentCatalog(): Array<{ id: string; name: string; capabilities: string[] }> {
-  return listAgents().map(a => ({
+  if (catalogCache) return catalogCache
+  catalogCache = listAgents().map(a => ({
     id: a.id,
     name: a.name,
     capabilities: a.capabilities || [a.personality.slice(0, 100)],
   }))
+  return catalogCache
+}
+
+export function invalidateAgentCache(): void {
+  catalogCache = null
+  scanAndCacheAgents()
 }
 
 export function isDelegationRequest(text: string): { agentId: string; prompt: string } | null {
@@ -121,6 +148,7 @@ export function deleteAgent(id: string): boolean {
 }
 
 export function registerMainAgent(): void {
+  scanAndCacheAgents()
   if (!agents.has('main')) {
     registerAgent({
       id: 'main',

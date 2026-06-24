@@ -1,9 +1,12 @@
-import OpenAI from 'openai'
-import {
-  OPENCODE_API_KEY, OPENCODE_API_BASE_URL, OPENCODE_MODEL,
-  AGENT_MAX_TURNS, AGENT_TIMEOUT_MS
-} from './config.js'
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
+import { execSync } from 'child_process'
+import { dirname } from 'path'
+import { globSync } from 'glob'
+import { getClient, getModel } from './llm-client.js'
+import { AGENT_MAX_TURNS } from './config.js'
 import { logger } from './logger.js'
+
+import type OpenAI from 'openai'
 
 export interface AgentMessage {
   role: 'system' | 'user' | 'assistant'
@@ -145,7 +148,6 @@ async function executeToolCall(toolCall: ToolCall): Promise<string> {
 
   switch (toolCall.function.name) {
     case 'read_file': {
-      const { readFileSync } = await import('fs')
       try {
         return readFileSync(args.path, 'utf-8').slice(0, 50000)
       } catch (e: unknown) {
@@ -153,16 +155,16 @@ async function executeToolCall(toolCall: ToolCall): Promise<string> {
       }
     }
     case 'write_file': {
-      const { writeFileSync } = await import('fs')
-      const { dirname } = await import('path')
-      const { mkdirSync, existsSync } = await import('fs')
-      const dir = dirname(args.path)
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-      writeFileSync(args.path, args.content, 'utf-8')
-      return `File written: ${args.path}`
+      try {
+        const dir = dirname(args.path)
+        if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+        writeFileSync(args.path, args.content, 'utf-8')
+        return `File written: ${args.path}`
+      } catch (e: unknown) {
+        return `Error writing file: ${(e as Error).message}`
+      }
     }
     case 'bash': {
-      const { execSync } = await import('child_process')
       try {
         const opts: Record<string, unknown> = { maxBuffer: 2 * 1024 * 1024, timeout: 30000 }
         if (args.workdir) opts.cwd = args.workdir
@@ -174,17 +176,17 @@ async function executeToolCall(toolCall: ToolCall): Promise<string> {
       }
     }
     case 'glob': {
-      const { globSync } = await import('glob')
       try {
         return globSync(args.pattern, { dot: true }).join('\n').slice(0, 10000) || 'No matches'
       } catch {
-        return `Error: invalid glob pattern`
+        return 'Error: invalid glob pattern'
       }
     }
     case 'grep': {
-      const { execSync } = await import('child_process')
       try {
-        const cmd = `rg --no-heading -n "${args.pattern.replace(/"/g, '\\"')}" ${args.include ? `-g "${args.include}"` : ''} 2>nul || findstr /s /n /r "${args.pattern.replace(/"/g, '\\"')}" *`
+        const escaped = args.pattern.replace(/"/g, '\\"')
+        const includeFlag = args.include ? ` -g "${args.include.replace(/"/g, '\\"')}"` : ''
+        const cmd = `rg --no-heading -n "${escaped}"${includeFlag} 2>nul || findstr /s /n /r "${escaped}" *`
         const output = execSync(cmd, { maxBuffer: 2 * 1024 * 1024, timeout: 15000 })
         return output.toString().slice(0, 50000)
       } catch {
@@ -215,13 +217,9 @@ async function executeToolCall(toolCall: ToolCall): Promise<string> {
 }
 
 export async function queryAgent(options: AgentOptions): Promise<AgentResult> {
-  const client = new OpenAI({
-    apiKey: OPENCODE_API_KEY || 'no-key',
-    baseURL: OPENCODE_API_BASE_URL || undefined,
-  })
-
+  const client = getClient()
+  const model = getModel()
   const maxTurns = options.maxTurns ?? AGENT_MAX_TURNS
-  const model = OPENCODE_MODEL
 
   const systemPrompt = options.systemPrompt || `You are an AI assistant running in OpenCode OS.
 You have access to tools to read/write files, execute commands, search the web, and search code.
@@ -262,11 +260,15 @@ Respond concisely and helpfully.`
     }
 
     if (choice.finish_reason === 'tool_calls' && choice.message.tool_calls) {
-      messages.push({ role: 'assistant', content: choice.message.content ?? '', tool_calls: choice.message.tool_calls.map(tc => ({
-        id: tc.id,
-        type: 'function' as const,
-        function: { name: tc.function.name, arguments: tc.function.arguments }
-      })) })
+      messages.push({
+        role: 'assistant',
+        content: choice.message.content ?? '',
+        tool_calls: choice.message.tool_calls.map(tc => ({
+          id: tc.id,
+          type: 'function' as const,
+          function: { name: tc.function.name, arguments: tc.function.arguments }
+        }))
+      })
 
       for (const tc of choice.message.tool_calls) {
         const result = await executeToolCall({

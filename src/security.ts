@@ -1,10 +1,11 @@
 import { createHash, randomBytes } from 'crypto'
 import { SECURITY_PIN_HASH, IDLE_LOCK_MINUTES, EMERGENCY_KILL_PHRASE } from './config.js'
-import { isSystemLocked, setLocked, touchActivity, lastActivityAt } from './state.js'
+import { isSystemLocked, setLocked, touchActivity } from './state.js'
 import { insertAuditEntry } from './db.js'
 import { logger } from './logger.js'
 
 let idleTimer: ReturnType<typeof setTimeout> | null = null
+let onShutdown: (() => void) | null = null
 
 export function setPinHash(pin: string): string {
   const salt = randomBytes(16).toString('hex')
@@ -48,12 +49,18 @@ export function resetIdleTimer(): void {
   }, IDLE_LOCK_MINUTES * 60 * 1000)
 }
 
+export function setShutdownHandler(handler: () => void): void {
+  onShutdown = handler
+}
+
 export function checkKillPhrase(text: string): boolean {
   if (!EMERGENCY_KILL_PHRASE) return false
-  if (text.toLowerCase() === EMERGENCY_KILL_PHRASE.toLowerCase()) {
-    insertAuditEntry({ agent_id: 'system', chat_id: 'system', action: 'kill', detail: 'Emergency kill phrase triggered' })
-    logger.warn('Emergency kill phrase detected, shutting down')
-    process.exit(0)
-  }
-  return false
+  if (text.toLowerCase() !== EMERGENCY_KILL_PHRASE.toLowerCase()) return false
+
+  insertAuditEntry({ agent_id: 'system', chat_id: 'system', action: 'kill', detail: 'Emergency kill phrase triggered' })
+  logger.warn('Emergency kill phrase detected, shutting down')
+
+  if (onShutdown) onShutdown()
+
+  process.exit(0)
 }

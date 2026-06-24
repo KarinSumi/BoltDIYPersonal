@@ -2,12 +2,12 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from '
 import { join } from 'path'
 import { PROJECT_ROOT, TELEGRAM_BOT_TOKEN, ALLOWED_CHAT_ID } from './config.js'
 import { STORE_DIR, UPLOADS_DIR } from './config.js'
-import { initDatabase, runSalienceDecay } from './db.js'
+import { initDatabase, getDb, runSalienceDecay } from './db.js'
 import { createBot } from './bot.js'
 import { startDashboard } from './dashboard.js'
 import { initScheduler } from './scheduler.js'
 import { registerMainAgent } from './orchestrator.js'
-import { resetIdleTimer } from './security.js'
+import { resetIdleTimer, setShutdownHandler } from './security.js'
 import { startConsolidationLoop } from './memory-consolidate.js'
 import { logger } from './logger.js'
 
@@ -69,6 +69,7 @@ async function main(): Promise<void> {
   initDatabase()
   registerMainAgent()
   resetIdleTimer()
+  setShutdownHandler(gracefulShutdown)
 
   runSalienceDecay()
   setInterval(() => runSalienceDecay(), 86400000)
@@ -95,8 +96,8 @@ async function main(): Promise<void> {
     console.log('\n✓ OpenCode OS is running!')
     console.log('  Send a message to your Telegram bot to begin.\n')
 
-    process.on('SIGINT', () => { releaseLock(); process.exit(0) })
-    process.on('SIGTERM', () => { releaseLock(); process.exit(0) })
+    process.on('SIGINT', () => { gracefulShutdown(); process.exit(0) })
+    process.on('SIGTERM', () => { gracefulShutdown(); process.exit(0) })
   } catch (err) {
     releaseLock()
     logger.error({ err }, 'Failed to start bot')
@@ -104,6 +105,12 @@ async function main(): Promise<void> {
     console.error('  Check TELEGRAM_BOT_TOKEN in your .env file.')
     process.exit(1)
   }
+}
+
+function gracefulShutdown(): void {
+  releaseLock()
+  try { getDb().close() } catch { /* ok */ }
+  logger.info('Graceful shutdown complete')
 }
 
 main().catch((err) => {
