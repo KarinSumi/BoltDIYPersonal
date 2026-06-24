@@ -8,18 +8,46 @@ Personal AI assistant accessible via Telegram with a team of specialist sub-agen
 
 ## Quick Start
 
+### One-command install (recommended)
+
+**Windows:**
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\quickstart.ps1
+```
+
+**macOS / Ubuntu:**
+```bash
+chmod +x scripts/quickstart.sh && ./scripts/quickstart.sh
+```
+
+### Manual install
+
 ```bash
 git clone https://github.com/KarinSumi/BoltDIYPersonal.git
 cd BoltDIYPersonal
 npm install
 npm run build
-node scripts/setup.mjs   # interactive .env wizard
+npm run setup   # interactive .env wizard
 npm start
 ```
 
 Send `/chatid` to your Telegram bot, add the ID to `.env`, restart.
 
 > **Minimum Node.js:** v20+ (uses built-in `node:sqlite`)
+
+### One-command install
+
+**Windows (PowerShell):**
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\quickstart.ps1
+```
+
+**macOS / Ubuntu:**
+```bash
+chmod +x scripts/quickstart.sh && ./scripts/quickstart.sh
+```
+
+Both scripts check prerequisites, clone, install, build, and run the interactive .env wizard.
 
 ---
 
