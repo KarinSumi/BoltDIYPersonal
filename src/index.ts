@@ -8,7 +8,10 @@ import { startDashboard } from './dashboard.js'
 import { initScheduler } from './scheduler.js'
 import { registerMainAgent } from './orchestrator.js'
 import { resetIdleTimer, setShutdownHandler } from './security.js'
-import { startConsolidationLoop } from './memory-consolidate.js'
+import { startDispatcher, stopDispatcher } from './dispatcher.js'
+import { startKanbanWorker, stopKanbanWorker } from './kanban-worker.js'
+import { startProgressReporter, stopProgressReporter } from './progress-reporter.js'
+import { startHeartbeat, stopHeartbeat } from './heartbeat.js'
 import { logger } from './logger.js'
 
 const PID_FILE = join(STORE_DIR, 'opencode.pid')
@@ -32,6 +35,14 @@ function acquireLock(): void {
 function releaseLock(): void {
   try { unlinkSync(PID_FILE) } catch { /* ignore */ }
 }
+
+process.on('uncaughtException', (err) => {
+  logger.error({ err: err.message, stack: err.stack?.split('\n').slice(0, 4).join('\n') }, 'Uncaught exception')
+})
+
+process.on('unhandledRejection', (reason) => {
+  logger.error({ err: String(reason) }, 'Unhandled rejection')
+})
 
 function printBanner(): void {
   console.log(`
@@ -74,6 +85,11 @@ async function main(): Promise<void> {
   runSalienceDecay()
   setInterval(() => runSalienceDecay(), 86400000)
 
+  startDispatcher()
+  startKanbanWorker()
+  startProgressReporter()
+  startHeartbeat()
+
   const bot = createBot()
 
   startDashboard()
@@ -108,6 +124,10 @@ async function main(): Promise<void> {
 }
 
 function gracefulShutdown(): void {
+  stopDispatcher()
+  stopKanbanWorker()
+  stopProgressReporter()
+  stopHeartbeat()
   releaseLock()
   try { getDb().close() } catch { /* ok */ }
   logger.info('Graceful shutdown complete')

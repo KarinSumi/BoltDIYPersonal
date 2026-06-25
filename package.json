@@ -17,9 +17,13 @@
     "warroom:bundle": "npx esbuild warroom/client.js --bundle --outfile=warroom/client.bundle.js --format=esm",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "pm2:start": "pm2 start dist/index.js --name opencode-os",
+    "pm2:start": "pm2 start ecosystem.config.js",
     "pm2:stop": "pm2 stop opencode-os",
-    "pm2:logs": "pm2 logs opencode-os"
+    "pm2:restart": "pm2 restart opencode-os",
+    "pm2:logs": "pm2 logs opencode-os",
+    "pm2:status": "pm2 status",
+    "pm2:save": "pm2 save",
+    "pm2:startup": "pm2 startup"
   },
   "engines": {
     "node": ">=20"

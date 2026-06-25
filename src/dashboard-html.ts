@@ -14,7 +14,8 @@ body{background:#0a0a0f;color:#e6edf7;font-family:system-ui,-apple-system,sans-s
 .sidebar a{display:block;padding:8px 12px;color:#cdd6e4;text-decoration:none;border-radius:6px;font-size:13px;margin:2px 0}
 .sidebar a:hover{background:#1b2432;color:#fff}
 .sidebar a.active{background:#E07A4F22;color:#E07A4F;border:1px solid #E07A4F44}
-.main{flex:1;padding:24px;overflow-y:auto}
+.sidebar .sse-status{font-size:11px;color:#7d8a9a;margin-top:20px;padding:8px 12px;border-radius:6px;background:#0a0a0f}
+.main{flex:1;padding:24px;overflow-y:auto;display:flex;flex-direction:column}
 .section{display:none}
 .section.active{display:block}
 .card{background:#11161d;border:1px solid #1c2430;border-radius:10px;padding:16px;margin-bottom:16px}
@@ -24,18 +25,43 @@ body{background:#0a0a0f;color:#e6edf7;font-family:system-ui,-apple-system,sans-s
 .stat{border:1px solid #1c2430;border-radius:8px;padding:14px;background:#11161d}
 .stat .value{font-size:22px;font-weight:600;color:#E07A4F}
 .stat .label{font-size:11px;color:#7d8a9a;margin-top:4px}
+.stat .status-dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:6px;vertical-align:middle}
 table{width:100%;border-collapse:collapse;font-size:12px}
 th,td{padding:8px 10px;text-align:left;border-bottom:1px solid #1c2430}
 th{color:#7d8a9a;font-weight:500;font-size:11px;text-transform:uppercase}
 .memory-item{padding:8px 0;border-bottom:1px solid #1c2430;font-size:12px}
 .memory-item .importance{display:inline-block;width:60px;height:4px;border-radius:2px;margin-right:8px}
-.status-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
 .toolbar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
 input,select{background:#0a0a0f;border:1px solid #1c2430;color:#e6edf7;padding:6px 10px;border-radius:6px;font-size:12px}
 button{background:#E07A4F;color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px}
 button:hover{opacity:.9}
 .btn-secondary{background:#1b2432;color:#e6edf7;border:1px solid #1c2430}
 .privacy-blur .blur-target{filter:blur(5px);transition:filter .3s}
+.activity-feed{max-height:400px;overflow-y:auto;padding:0;list-style:none}
+.activity-feed li{padding:8px 12px;border-bottom:1px solid #1c2430;font-size:12px;display:flex;align-items:flex-start;gap:8px}
+.activity-feed .time{color:#7d8a9a;white-space:nowrap;font-size:11px;min-width:60px}
+.activity-feed .event{color:#E07A4F;font-weight:500;min-width:100px}
+.activity-feed .msg{color:#cdd6e4;word-break:break-all}
+.agent-rail{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.agent-card{border:1px solid #1c2430;border-radius:8px;padding:10px 14px;background:#11161d;font-size:12px;min-width:120px;text-align:center}
+.agent-card .name{color:#E07A4F;font-weight:600}
+.agent-card .status{color:#7d8a9a;font-size:11px;margin-top:4px}
+.agent-card.online{border-color:#2ea043}
+.agent-card.busy{border-color:#d29922}
+.agent-card.offline{border-color:#da3633}
+.kanban-board-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-bottom:20px}
+.kanban-board-card{border:1px solid #1c2430;border-radius:8px;padding:14px;background:#11161d;cursor:pointer}
+.kanban-board-card:hover{border-color:#E07A4F}
+.kanban-board-card .btitle{color:#E07A4F;font-weight:600;font-size:13px}
+.kanban-board-card .bmeta{color:#7d8a9a;font-size:11px;margin-top:4px}
+.kanban-board-card .bprogress{height:4px;background:#1c2430;border-radius:2px;margin-top:8px}
+.kanban-board-card .bprogress .bfill{height:100%;background:#E07A4F;border-radius:2px;transition:width .5s}
+.kanban-columns{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;min-height:300px}
+.kanban-col{background:#0e1219;border:1px solid #1c2430;border-radius:8px;padding:10px;min-height:120px}
+.kanban-col h4{font-size:11px;color:#7d8a9a;text-transform:uppercase;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid #1c2430}
+.kanban-task-card{border:1px solid #1c2430;border-radius:6px;padding:8px;margin-bottom:6px;background:#11161d;font-size:11px;cursor:default}
+.kanban-task-card .tassignee{color:#7d8a9a;font-size:10px}
+.kanban-back{margin-bottom:12px;display:inline-block}
 </style>
 </head>
 <body>
@@ -46,11 +72,14 @@ button:hover{opacity:.9}
 <a href="#agents" onclick="showTab('agents')">Agents</a>
 <a href="#tasks" onclick="showTab('tasks')">Tasks</a>
 <a href="#audit" onclick="showTab('audit')">Audit</a>
+<a href="#kanban" onclick="showTab('kanban')">Kanban</a>
 <a href="#hive" onclick="showTab('hive')">Hive Mind</a>
+<div class="sse-status" id="sse-status">SSE: disconnected</div>
 </div>
 <div class="main" id="app">
 <div id="section-overview" class="section active">
 <h2>Overview</h2>
+<div class="agent-rail" id="agent-rail"></div>
 <div class="stats" id="stats-container">
 <div class="stat"><div class="value" id="stat-memories">0</div><div class="label">Memories</div></div>
 <div class="stat"><div class="value" id="stat-agents">1</div><div class="label">Active Agents</div></div>
@@ -58,6 +87,7 @@ button:hover{opacity:.9}
 <div class="stat"><div class="value" id="stat-uptime">0s</div><div class="label">Uptime</div></div>
 </div>
 <div class="card"><h3>Token Usage (7 days)</h3><div class="chart-box"><canvas id="tokenChart"></canvas></div></div>
+<div class="card"><h3>Activity Feed</h3><ul class="activity-feed" id="activity-feed"><li style="color:#7d8a9a">Waiting for events...</li></ul></div>
 </div>
 <div id="section-memory" class="section">
 <h2>Memory Timeline</h2>
@@ -84,6 +114,15 @@ button:hover{opacity:.9}
 </div>
 <table><thead><tr><th>Time</th><th>Agent</th><th>Action</th><th>Detail</th><th>Blocked</th></tr></thead><tbody id="audit-list"></tbody></table>
 </div>
+<div id="section-kanban" class="section">
+<h2>Kanban Boards</h2>
+<div id="kanban-board-list" class="kanban-board-list"></div>
+<div id="kanban-board-detail" style="display:none">
+<a href="#" class="kanban-back" onclick="showKanbanList()">&larr; Back to boards</a>
+<h3 id="kanban-detail-title"></h3>
+<div class="kanban-columns" id="kanban-columns"></div>
+</div>
+</div>
 <div id="section-hive" class="section">
 <h2>Hive Mind Activity</h2>
 <div id="hive-list"></div>
@@ -106,6 +145,85 @@ privacyBlur = !privacyBlur;
 document.getElementById('app').classList.toggle('privacy-blur', privacyBlur);
 }
 
+async function loadAgentStatus() {
+try {
+const agents = await (await fetch(API('/api/agents/status'))).json();
+const rail = document.getElementById('agent-rail');
+if (!Array.isArray(agents) || agents.length === 0) {
+rail.innerHTML = '<div class=\"agent-card online\" id=\"agent-card-main\"><div class=\"name\">main</div><div class=\"status\">online</div></div>';
+return;
+}
+rail.innerHTML = agents.map(a => {
+const cls = a.status === 'busy' ? 'busy' : a.status === 'offline' ? 'offline' : 'online';
+return '<div class=\"agent-card ' + cls + '\" id=\"agent-card-' + esc(a.agent_id) + '\"><div class=\"name\">' +
+esc(a.agent_id) + '</div><div class=\"status\">' + esc(a.status) + '</div></div>';
+}).join('');
+} catch(e) { console.error(e); }
+}
+
+// SSE EventSource
+function connectSSE() {
+const statusEl = document.getElementById('sse-status');
+const feed = document.getElementById('activity-feed');
+const evtSource = new EventSource(API('/api/events'));
+
+evtSource.addEventListener('connected', () => {
+statusEl.textContent = 'SSE: connected';
+statusEl.style.color = '#2ea043';
+});
+
+evtSource.addEventListener('task_completed', (e) => {
+const data = JSON.parse(e.data);
+addActivity(data.timestamp, 'task_completed', 'Task ' + data.taskId.slice(0,8) + ' completed by ' + data.agentId);
+loadAgentStatus();
+loadKanbanBoards();
+});
+
+evtSource.addEventListener('task_failed', (e) => {
+const data = JSON.parse(e.data);
+addActivity(data.timestamp, 'task_failed', 'Task ' + data.taskId.slice(0,8) + ' failed on ' + data.agentId);
+loadAgentStatus();
+loadKanbanBoards();
+});
+
+evtSource.addEventListener('user_message', () => {
+addActivity(Date.now(), 'message', 'User message received');
+});
+
+evtSource.addEventListener('assistant_message', () => {
+addActivity(Date.now(), 'response', 'Assistant response sent');
+});
+
+evtSource.addEventListener('error', (e) => {
+const data = JSON.parse(e.data);
+addActivity(data.timestamp, 'error', data.message || 'Unknown error');
+});
+
+evtSource.addEventListener('heartbeat_tick', (e) => {
+const data = JSON.parse(e.data);
+const dot = document.getElementById('heartbeat-dot');
+if (dot) dot.style.background = data.status === 'ok' ? '#2ea043' : data.status === 'degraded' ? '#d29922' : '#da3633';
+});
+
+evtSource.onerror = () => {
+statusEl.textContent = 'SSE: disconnected';
+statusEl.style.color = '#da3633';
+setTimeout(connectSSE, 3000);
+};
+}
+
+function addActivity(timestamp, event, msg) {
+const feed = document.getElementById('activity-feed');
+if (feed.querySelector('li')?.textContent === 'Waiting for events...') {
+feed.innerHTML = '';
+}
+const li = document.createElement('li');
+const time = new Date(timestamp).toLocaleTimeString();
+li.innerHTML = '<span class="time">' + time + '</span><span class="event">' + event + '</span><span class="msg">' + esc(msg) + '</span>';
+feed.insertBefore(li, feed.firstChild);
+if (feed.children.length > 50) feed.removeChild(feed.lastChild);
+}
+
 async function loadOverview() {
 try {
 const memories = await (await fetch(API('/api/memories?limit=1'))).json();
@@ -115,6 +233,7 @@ document.getElementById('stat-memories').textContent = Array.isArray(memories) ?
 document.getElementById('stat-agents').textContent = Array.isArray(agents) ? agents.length : 1;
 document.getElementById('stat-tasks').textContent = (tasks.missions||[]).filter(t=>t.status==='queued').length;
 document.getElementById('stat-uptime').textContent = 'running';
+loadAgentStatus();
 } catch(e) { console.error(e); }
 }
 
@@ -168,6 +287,21 @@ list.innerHTML = entries.map(e => '<tr class="' + (e.blocked ? 'blur-target' : '
 '</td><td>' + (e.blocked ? '🚫' : '') + '</td></tr>').join('');
 }
 
+async function loadActivityFeed() {
+try {
+const entries = await (await fetch(API('/api/activity?limit=30'))).json();
+const feed = document.getElementById('activity-feed');
+if (!Array.isArray(entries) || entries.length === 0) return;
+feed.innerHTML = '';
+entries.forEach(e => {
+const li = document.createElement('li');
+const time = new Date(e.timestamp).toLocaleTimeString();
+li.innerHTML = '<span class="time">' + time + '</span><span class="event">' + e.event + '</span><span class="msg">' + esc(e.summary || '') + '</span>';
+feed.appendChild(li);
+});
+} catch(e) { console.error(e); }
+}
+
 async function loadHive() {
 const entries = await (await fetch(API('/api/hive-mind'))).json();
 const list = document.getElementById('hive-list');
@@ -180,9 +314,53 @@ list.innerHTML = entries.map(e => '<div class="memory-item"><b>' + esc(e.agent_i
 function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function hsl(v) { var h = ((1-v)*120).toString(10); return 'hsl('+h+',70%,50%)'; }
 
-setInterval(() => { loadOverview(); }, 30000);
+// Kanban
+let kanbanBoards = [];
+let kanbanTasks = {};
 
-loadOverview(); loadMemory(); loadAgents(); loadTasks(); loadAudit(); loadHive();
+async function loadKanbanBoards() {
+try {
+kanbanBoards = await (await fetch(API('/api/kanban/boards'))).json();
+const list = document.getElementById('kanban-board-list');
+if (!Array.isArray(kanbanBoards) || kanbanBoards.length === 0) {
+list.innerHTML = '<p style="color:#7d8a9a">No boards. Create one with /kanban.</p>';
+return;
+}
+list.innerHTML = kanbanBoards.map(b => '<div class="kanban-board-card" onclick="showKanbanBoard(\'' + b.id + '\')">' +
+'<div class="btitle">' + esc(b.title) + '</div>' +
+'<div class="bmeta">' + esc(b.status) + ' &middot; ' + (b.task_count||0) + ' tasks</div>' +
+'<div class="bprogress"><div class="bfill" style="width:' + (b.progress_pct||0) + '%"></div></div></div>').join('');
+} catch(e) { console.error(e); }
+}
+
+async function showKanbanBoard(boardId) {
+document.getElementById('kanban-board-list').style.display = 'none';
+document.getElementById('kanban-board-detail').style.display = 'block';
+const data = await (await fetch(API('/api/kanban/board/' + boardId))).json();
+document.getElementById('kanban-detail-title').textContent = data.board.title;
+const columns = document.getElementById('kanban-columns');
+const statuses = ['triage', 'ready', 'running', 'paused', 'completed', 'failed'];
+columns.innerHTML = statuses.map(s => {
+const tasks = (data.tasks||[]).filter(t => t.status === s);
+return '<div class="kanban-col"><h4>' + s + ' (' + tasks.length + ')</h4>' +
+tasks.map(t => '<div class="kanban-task-card" title="' + esc(t.title) + '"><b>' + esc(t.title).slice(0,20) +
+'</b><div class="tassignee">' + (t.assignee ? '@' + esc(t.assignee) : 'unassigned') + '</div></div>').join('') +
+'</div>';
+}).join('');
+}
+
+function showKanbanList() {
+document.getElementById('kanban-board-list').style.display = '';
+document.getElementById('kanban-board-detail').style.display = 'none';
+loadKanbanBoards();
+}
+
+setInterval(() => { loadOverview(); }, 30000);
+setInterval(() => { loadAgentStatus(); }, 10000);
+setInterval(() => { loadKanbanBoards(); }, 15000);
+
+connectSSE();
+loadOverview(); loadAgentStatus(); loadActivityFeed(); loadKanbanBoards(); loadMemory(); loadAgents(); loadTasks(); loadAudit(); loadHive();
 </script>
 </body>
 </html>`

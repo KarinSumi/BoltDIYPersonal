@@ -1,16 +1,16 @@
-import { Bot, Context, InputFile } from 'grammy'
-import { TELEGRAM_BOT_TOKEN, ALLOWED_CHAT_ID, MAX_MESSAGE_LENGTH, TYPING_REFRESH_MS, SHOW_COST_FOOTER } from './config.js'
-import { queryAgent, AgentMessage, AgentResult } from './opencode-agent.js'
-import { getSession, setSession, clearSession, insertTurn, getRecentTurns } from './db.js'
+import { Bot, Context } from 'grammy'
+import { TELEGRAM_BOT_TOKEN, ALLOWED_CHAT_ID, MAX_MESSAGE_LENGTH } from './config.js'
+import { AgentMessage } from './opencode-agent.js'
+import { clearSession, insertTurn, getRecentTurns } from './db.js'
 import { enqueue } from './message-queue.js'
-import { formatCostFooter } from './cost-footer.js'
 import { logger } from './logger.js'
 import { voiceEnabledChats, chatEvents, abortControllers } from './state.js'
-import { isDelegationRequest, getAgent, listAgents, buildAgentCatalog } from './orchestrator.js'
-import { classifyIntent } from './router.js'
+import { listAgents, listKanbanBoards, listKanbanTasks, getKanbanBoard, getKanbanTask } from './orchestrator.js'
+import { classifyComplexity, runOrchestrator, respondDirect } from './master-orchestrator.js'
 import { isLocked, lock, unlock, checkKillPhrase, resetIdleTimer } from './security.js'
 import { touchActivity } from './state.js'
 import { insertScheduledTask, insertMission, listScheduledTasks, listMissions } from './db.js'
+import { syncAllBoardsToFiles } from './obsidian-sync.js'
 import { v4 as uuid } from 'uuid'
 
 const INJECTION_PATTERNS = [
@@ -41,34 +41,26 @@ function formatForTelegram(text: string): string {
   result = result.replace(/^### (.+)$/gm, '<b>$1</b>')
   result = result.replace(/^## (.+)$/gm, '<b>$1</b>')
   result = result.replace(/^# (.+)$/gm, '<b>$1</b>')
-
   result = result.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
   result = result.replace(/__(.+?)__/g, '<b>$1</b>')
   result = result.replace(/\*(.+?)\*/g, '<i>$1</i>')
   result = result.replace(/_(.+?)_/g, '<i>$1</i>')
   result = result.replace(/~~(.+?)~~/g, '<s>$1</s>')
-
   result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
-
   result = result.replace(/^- \[ \] /gm, '☐ ')
   result = result.replace(/^- \[x\] /gmi, '☑ ')
-
   result = result.replace(/^---+/gm, '—')
   result = result.replace(/^\*\*\*+/gm, '—')
 
   result = result.replace(/%%CODE_BLOCK_(\d+)%%/g, (_match, idx) => codeBlocks[parseInt(idx)])
   result = result.replace(/%%INLINE_CODE_(\d+)%%/g, (_match, idx) => inlineCodes[parseInt(idx)])
-
   result = result.replace(/%%(CODE_BLOCK|INLINE_CODE)_\d+%%/g, '')
 
   return result
 }
 
 function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 function splitMessage(text: string, limit = MAX_MESSAGE_LENGTH): string[] {
@@ -83,13 +75,6 @@ function splitMessage(text: string, limit = MAX_MESSAGE_LENGTH): string[] {
   return parts
 }
 
-function getTypingIndicator(ctx: Context): ReturnType<typeof setInterval> | null {
-  if (!ctx.chat?.id) return null
-  return setInterval(() => {
-    ctx.api.sendChatAction(ctx.chat!.id, 'typing').catch(() => {})
-  }, TYPING_REFRESH_MS)
-}
-
 export function createBot(): Bot {
   if (!TELEGRAM_BOT_TOKEN) {
     logger.error('TELEGRAM_BOT_TOKEN is not set')
@@ -97,6 +82,55 @@ export function createBot(): Bot {
   }
 
   const bot = new Bot(TELEGRAM_BOT_TOKEN)
+
+  function isAuthorisedChat(ctx: Context): boolean {
+    const chatId = String(ctx.chat?.id ?? '')
+    return isAuthorised(chatId)
+  }
+
+  // ── Per-command rate limiter middleware ──
+  bot.use(async (ctx, next) => {
+    if (ctx.message?.text?.startsWith('/')) {
+      const chatId = String(ctx.chat!.id)
+      if (!checkRateLimit(chatId)) {
+        await ctx.reply('Rate limit exceeded. Please slow down (max 10 commands per minute).')
+        return
+      }
+    }
+    await next()
+  })
+
+  // ── Rate limiter: per-chat sliding window ──
+  const RATE_LIMIT_WINDOW = 60_000
+  const RATE_LIMIT_MAX = 10
+  const chatTimestamps = new Map<string, number[]>()
+
+  function checkRateLimit(chatId: string): boolean {
+    const now = Date.now()
+    const timestamps = chatTimestamps.get(chatId) || []
+    const filtered = timestamps.filter(t => now - t < RATE_LIMIT_WINDOW)
+    if (filtered.length >= RATE_LIMIT_MAX) {
+      chatTimestamps.set(chatId, filtered)
+      return false
+    }
+    filtered.push(now)
+    chatTimestamps.set(chatId, filtered)
+    return true
+  }
+
+  // Clean stale rate limiter entries every 5 minutes
+  const RATE_LIMITER_CLEANUP_INTERVAL = 300_000
+  const rateLimiterCleanupTimer = setInterval(() => {
+    const cutoff = Date.now() - RATE_LIMIT_WINDOW * 2
+    for (const [chatId, timestamps] of chatTimestamps) {
+      if (timestamps.length === 0 || timestamps[timestamps.length - 1] < cutoff) {
+        chatTimestamps.delete(chatId)
+      }
+    }
+  }, RATE_LIMITER_CLEANUP_INTERVAL)
+
+  // Allow cleanup timer to be cleared for testing / restart
+  ;(bot as any).__rateLimiterCleanupTimer = rateLimiterCleanupTimer
 
   bot.command('start', (ctx) => {
     ctx.reply('OpenCode OS is running. Send me a message!')
@@ -108,12 +142,16 @@ export function createBot(): Bot {
       '/chatid — Show your chat ID\n' +
       '/newchat — Clear conversation history\n' +
       '/agents — List available agents\n' +
-      '/pin <code> — Lock the system with a PIN\n' +
+      '/pin <code> — Unlock with a PIN\n' +
       '/lock — Lock the system immediately\n' +
+      '/setpin <new_code> — Change the unlock PIN\n' +
+      '/kanban — Show active kanban boards\n' +
+      '/board <id> — Show board details and tasks\n' +
+      '/taskinfo <id> — Show task details\n' +
+      '/obssync — Sync all boards to Obsidian vault\n' +
+      '/obswatch — Toggle Obsidian file watcher\n' +
       '/voice — Toggle voice replies\n' +
-      '/help — Show this message\n\n' +
-      'Messages are auto-routed to the best agent.\n' +
-      'Use @agentname <message> to force-delegate to a specific agent.'
+      '/help — Show this message'
     )
   })
 
@@ -122,12 +160,14 @@ export function createBot(): Bot {
   })
 
   bot.command('newchat', (ctx) => {
+    if (!isAuthorisedChat(ctx)) return
     const chatId = String(ctx.chat!.id)
     clearSession(chatId)
     ctx.reply('Session cleared. Starting fresh.')
   })
 
   bot.command('agents', (ctx) => {
+    if (!isAuthorisedChat(ctx)) return
     const agents = listAgents()
     if (agents.length === 0) {
       ctx.reply('No agents configured.')
@@ -141,12 +181,12 @@ export function createBot(): Bot {
   })
 
   bot.command('pin', (ctx) => {
+    if (!isAuthorisedChat(ctx)) return
     const code = ctx.match?.trim()
     if (!code) {
       ctx.reply('Usage: /pin <code>')
       return
     }
-    const chatId = String(ctx.chat!.id)
     const unlocked = unlock(code)
     if (unlocked) {
       touchActivity()
@@ -157,7 +197,34 @@ export function createBot(): Bot {
     }
   })
 
+  bot.command('setpin', async (ctx) => {
+    if (!isAuthorisedChat(ctx)) return
+    const code = ctx.match?.trim()
+    if (!code || code.length < 4) {
+      ctx.reply('Usage: /setpin <new_code> (min 4 characters)')
+      return
+    }
+    const { setPinHash } = await import('./security.js')
+    const { readFileSync, writeFileSync } = await import('fs')
+    const { join } = await import('path')
+    const { PROJECT_ROOT } = await import('./config.js')
+
+    const hash = setPinHash(code)
+    const envPath = join(PROJECT_ROOT, '.env')
+    let env = readFileSync(envPath, 'utf-8')
+
+    if (env.includes('SECURITY_PIN_HASH=')) {
+      env = env.replace(/^SECURITY_PIN_HASH=.*$/m, `SECURITY_PIN_HASH=${hash}`)
+    } else {
+      env += `\nSECURITY_PIN_HASH=${hash}\n`
+    }
+
+    writeFileSync(envPath, env)
+    ctx.reply('PIN updated. Use /pin <code> to unlock.')
+  })
+
   bot.command('task', (ctx) => {
+    if (!isAuthorisedChat(ctx)) return
     const chatId = String(ctx.chat!.id)
     const parts = ctx.match?.trim().split(/\s+/)
     if (!parts || parts.length < 2) {
@@ -168,59 +235,143 @@ export function createBot(): Bot {
     const prompt = parts.slice(1).join(' ')
     const tomorrow = new Date(Date.now() + 60000).toISOString()
     insertScheduledTask({
-      id: uuid(),
-      agent_id: agentId,
-      chat_id: chatId,
-      prompt,
-      schedule: 'once',
-      next_run: tomorrow,
+      id: uuid(), agent_id: agentId, chat_id: chatId, prompt,
+      schedule: 'once', next_run: tomorrow,
     })
     ctx.reply(`Task created for agent "${agentId}". Will run in ~1 minute. Check /status later.`)
   })
 
   bot.command('mission', (ctx) => {
+    if (!isAuthorisedChat(ctx)) return
     const parts = ctx.match?.trim().split(/\s+/)
     if (!parts || parts.length < 2) {
       ctx.reply('Usage: /mission <title> | <prompt>\nExample: /mission Health Check | Run diagnostics')
       return
     }
     const sep = ctx.match!.indexOf('|')
-    let title: string
-    let prompt: string
+    let title: string; let prompt: string
     if (sep !== -1) {
       title = ctx.match!.slice(0, sep).trim()
       prompt = ctx.match!.slice(sep + 1).trim()
     } else {
-      title = parts[0]
-      prompt = parts.slice(1).join(' ')
+      title = parts[0]; prompt = parts.slice(1).join(' ')
     }
     insertMission({ id: uuid(), title, prompt, priority: 0 })
     ctx.reply(`Mission "${title}" created and queued.`)
   })
 
   bot.command('status', (ctx) => {
+    if (!isAuthorisedChat(ctx)) return
     const tasks = listScheduledTasks() as Array<{ id: string; prompt: string; agent_id: string; status: string; next_run: string }>
     const missions = listMissions() as Array<{ id: string; title: string; status: string; priority: number }>
     let msg = ''
     if (tasks.length > 0) {
       msg += '**Scheduled Tasks:**\n' + tasks.slice(0, 5).map(t =>
-        `\u2022 ${t.prompt.slice(0, 60)} [${t.agent_id}] — ${t.status}`
+        `\u2022 ${t.prompt.slice(0, 60)} [${t.agent_id}] \u2014 ${t.status}`
       ).join('\n') + '\n\n'
     }
     if (missions.length > 0) {
       msg += '**Missions:**\n' + missions.slice(0, 5).map(m =>
-        `\u2022 ${m.title} — ${m.status}`
+        `\u2022 ${m.title} \u2014 ${m.status}`
       ).join('\n')
     }
     ctx.reply(msg || 'No tasks or missions yet.')
   })
 
   bot.command('lock', (ctx) => {
+    if (!isAuthorisedChat(ctx)) return
     lock()
     ctx.reply('System locked. Send your PIN to unlock.')
   })
 
+  bot.command('kanban', (ctx) => {
+    if (!isAuthorisedChat(ctx)) return
+    const chatId = String(ctx.chat!.id)
+    const boards = listKanbanBoards(chatId, 'active')
+    if (boards.length === 0) {
+      ctx.reply('No active kanban boards.')
+      return
+    }
+    const lines: string[] = ['<b>Active Kanban Boards</b>\n']
+    for (const b of boards) {
+      const tasks = listKanbanTasks(b.id)
+      const byStatus: Record<string, number> = {}
+      for (const t of tasks) {
+        byStatus[t.status] = (byStatus[t.status] || 0) + 1
+      }
+      const statusLine = Object.entries(byStatus)
+        .map(([s, n]) => `${s}: ${n}`).join(', ') || 'no tasks'
+      lines.push(
+        `<b>${b.title}</b> (${b.completed_count}/${b.task_count} — ${b.progress_pct}%)`,
+        `  ID: <code>${b.id}</code>`,
+        `  Status: ${b.status}  |  ${statusLine}`,
+        ''
+      )
+    }
+    ctx.reply(lines.join('\n'), { parse_mode: 'HTML' })
+  })
+
+  bot.command('board', (ctx) => {
+    if (!isAuthorisedChat(ctx)) return
+    const boardId = ctx.match?.trim()
+    if (!boardId) {
+      ctx.reply('Usage: /board <board_id>')
+      return
+    }
+    const board = getKanbanBoard(boardId)
+    if (!board) {
+      ctx.reply('Board not found.')
+      return
+    }
+    const tasks = listKanbanTasks(boardId)
+    const lines: string[] = [
+      `<b>${board.title}</b>`,
+      `Status: ${board.status}  |  Progress: ${board.progress_pct}%  |  Tasks: ${board.completed_count}/${board.task_count}`,
+      board.description ? `Description: ${board.description}` : '',
+      ''
+    ]
+    if (tasks.length === 0) {
+      lines.push('No tasks on this board.')
+    } else {
+      for (const t of tasks) {
+        const statusIcon = t.status === 'completed' ? '✅' : t.status === 'failed' ? '❌' : t.status === 'running' ? '🔄' : t.status === 'blocked' ? '⛔' : '⏳'
+        lines.push(`${statusIcon} <b>${t.title}</b> (<code>${t.id.slice(0, 8)}</code>) — ${t.status}`)
+        if (t.assignee) lines.push(`  Assignee: ${t.assignee}`)
+        if (t.result) lines.push(`  Result: ${t.result.slice(0, 200)}`)
+        if (t.error) lines.push(`  Error: ${t.error.slice(0, 200)}`)
+      }
+    }
+    ctx.reply(lines.join('\n'), { parse_mode: 'HTML' })
+  })
+
+  bot.command('taskinfo', (ctx) => {
+    if (!isAuthorisedChat(ctx)) return
+    const taskId = ctx.match?.trim()
+    if (!taskId) {
+      ctx.reply('Usage: /taskinfo <task_id>')
+      return
+    }
+    const task = getKanbanTask(taskId)
+    if (!task) {
+      ctx.reply('Task not found.')
+      return
+    }
+    const lines: string[] = [
+      `<b>${task.title}</b>`,
+      `ID: <code>${task.id}</code>`,
+      `Status: ${task.status}`,
+      `Priority: ${task.priority}`,
+      task.assignee ? `Assigned to: ${task.assignee}` : 'Unassigned',
+      task.depends_on ? `Dependencies: ${task.depends_on}` : 'No dependencies',
+      `Retries: ${task.retry_count}/${task.max_retries}`,
+      task.result ? `\nResult: ${task.result.slice(0, 500)}` : '',
+      task.error ? `\nError: ${task.error.slice(0, 500)}` : '',
+    ]
+    ctx.reply(lines.join('\n'), { parse_mode: 'HTML' })
+  })
+
   bot.command('voice', (ctx) => {
+    if (!isAuthorisedChat(ctx)) return
     const chatId = String(ctx.chat!.id)
     if (voiceEnabledChats.has(chatId)) {
       voiceEnabledChats.delete(chatId)
@@ -231,48 +382,170 @@ export function createBot(): Bot {
     }
   })
 
-  bot.on('message:text', async (ctx) => {
-    const chatId = String(ctx.chat!.id)
-    const text = ctx.message.text
+  bot.command('obssync', (ctx) => {
+    if (!isAuthorisedChat(ctx)) return
+    const count = syncAllBoardsToFiles()
+    if (count === 0) {
+      ctx.reply('No active boards to sync, or Obsidian vault not configured.')
+    } else {
+      ctx.reply(`Synced ${count} board(s) to Obsidian vault.`)
+    }
+  })
 
-    if (!isAuthorised(chatId)) {
-      ctx.reply('Unauthorised. Check ALLOWED_CHAT_ID in your .env.')
+  bot.command('obswatch', (ctx) => {
+    if (!isAuthorisedChat(ctx)) return
+    if (!process.env['OBSIDIAN_VAULT_PATH']) {
+      ctx.reply('Obsidian vault not configured. Set OBSIDIAN_VAULT_PATH in your .env.')
       return
     }
-
-    if (checkKillPhrase(text)) {
-      return
-    }
-
-    if (isLocked()) {
-      const unlocked = unlock(text)
-      if (unlocked) {
-        touchActivity()
-        resetIdleTimer()
-        await ctx.reply('System unlocked. Send your message again.')
+    import('./obsidian-sync.js').then(mod => {
+      if (mod.obsidianWatcherActive()) {
+        mod.stopObsidianWatcher()
+        ctx.reply('Obsidian watcher stopped.')
       } else {
-        await ctx.reply('\u26a0 System is locked. Enter your PIN to unlock.')
+        mod.startObsidianWatcher()
+        ctx.reply('Obsidian watcher started. Waiting for file changes...')
       }
-      return
-    }
-
-    if (text.startsWith('/')) {
-      await ctx.reply('Unknown command. Type /help for available commands.')
-      return
-    }
-
-    if (INJECTION_PATTERNS.some(p => p.test(text))) {
-      logger.warn({ chatId, text }, 'Prompt injection attempt blocked')
-      await ctx.reply('Message rejected.')
-      return
-    }
-
-    touchActivity()
-    resetIdleTimer()
-
-    await enqueue(chatId, async () => {
-      await handleTextMessage(ctx, chatId, text)
+    }).catch(() => {
+      ctx.reply('Failed to toggle Obsidian watcher.')
     })
+  })
+
+  const MAX_CONTENT_LENGTH = 8000
+
+function guardContent(text: string): string {
+  if (text.length <= MAX_CONTENT_LENGTH) return text
+  return text.slice(0, MAX_CONTENT_LENGTH) + '\n\n[Content truncated at 8000 characters]'
+}
+
+async function guardedReply(ctx: Context, text: string): Promise<void> {
+  try {
+    await ctx.reply(text)
+  } catch {
+    // reply failures are non-fatal (e.g. user blocked bot)
+  }
+}
+
+async function guardedEnqueue(chatId: string, ctx: Context, fn: () => Promise<void>): Promise<void> {
+  try {
+    await enqueue(chatId, fn)
+  } catch (err) {
+    logger.error({ chatId, err: (err as Error).message }, 'Enqueue failed')
+    await guardedReply(ctx, 'Internal error processing your request.')
+  }
+}
+
+// ── Message handlers ──
+
+  bot.on('message:text', async (ctx) => {
+    try {
+      const chatId = String(ctx.chat!.id)
+      let text = guardContent(ctx.message.text)
+
+      if (!isAuthorised(chatId)) {
+        await guardedReply(ctx, 'Unauthorised. Check ALLOWED_CHAT_ID in your .env.')
+        return
+      }
+      if (checkKillPhrase(text)) return
+      if (isLocked()) {
+        const unlocked = unlock(text)
+        if (unlocked) {
+          touchActivity(); resetIdleTimer()
+          await guardedReply(ctx, 'System unlocked. Send your message again.')
+        } else {
+          await guardedReply(ctx, '\u26a0 System is locked. Enter your PIN to unlock.')
+        }
+        return
+      }
+      if (text.startsWith('/')) {
+        await guardedReply(ctx, 'Unknown command. Type /help for available commands.')
+        return
+      }
+      if (INJECTION_PATTERNS.some(p => p.test(text))) {
+        logger.warn({ chatId, text }, 'Prompt injection attempt blocked')
+        await guardedReply(ctx, 'Message rejected.')
+        return
+      }
+
+      if (!checkRateLimit(chatId)) {
+        await guardedReply(ctx, 'Rate limit exceeded. Please slow down (max 10 messages per minute).')
+        return
+      }
+
+      touchActivity()
+      resetIdleTimer()
+
+      await guardedEnqueue(chatId, ctx, async () => {
+        await handleUserMessage(ctx, chatId, text)
+      })
+    } catch (err) {
+      logger.error({ err: (err as Error).message }, 'Unhandled error in text handler')
+      await guardedReply(ctx, 'Internal error. Please try again.')
+    }
+  })
+
+  bot.on('message:photo', async (ctx) => {
+    try {
+      const chatId = String(ctx.chat!.id)
+      if (!isAuthorised(chatId)) { await guardedReply(ctx, 'Unauthorised.'); return }
+      touchActivity()
+      if (!checkRateLimit(chatId)) { await guardedReply(ctx, 'Rate limit exceeded.'); return }
+      const caption = guardContent(ctx.message.caption || 'Analyze this image')
+      await guardedReply(ctx, 'Image received. Processing with orchestrator...')
+      await guardedEnqueue(chatId, ctx, async () => {
+        await handleUserMessage(ctx, chatId, `[Image] ${caption}`)
+      })
+    } catch (err) {
+      logger.error({ err: (err as Error).message }, 'Unhandled error in photo handler')
+    }
+  })
+
+  bot.on('message:document', async (ctx) => {
+    try {
+      const chatId = String(ctx.chat!.id)
+      if (!isAuthorised(chatId)) { await guardedReply(ctx, 'Unauthorised.'); return }
+      touchActivity()
+      if (!checkRateLimit(chatId)) { await guardedReply(ctx, 'Rate limit exceeded.'); return }
+      const fileName = ctx.message.document.file_name || 'document'
+      const caption = guardContent(ctx.message.caption || `Process this document: ${fileName}`)
+      await guardedReply(ctx, `Document "${fileName}" received. Processing...`)
+      await guardedEnqueue(chatId, ctx, async () => {
+        await handleUserMessage(ctx, chatId, `[Document: ${fileName}] ${caption}`)
+      })
+    } catch (err) {
+      logger.error({ err: (err as Error).message }, 'Unhandled error in document handler')
+    }
+  })
+
+  bot.on('message:voice', async (ctx) => {
+    try {
+      const chatId = String(ctx.chat!.id)
+      if (!isAuthorised(chatId)) { await guardedReply(ctx, 'Unauthorised.'); return }
+      touchActivity()
+      if (!checkRateLimit(chatId)) { await guardedReply(ctx, 'Rate limit exceeded.'); return }
+      await guardedReply(ctx, 'Voice message received. (Voice-to-text coming soon)')
+      await guardedEnqueue(chatId, ctx, async () => {
+        await handleUserMessage(ctx, chatId, '[Voice message]')
+      })
+    } catch (err) {
+      logger.error({ err: (err as Error).message }, 'Unhandled error in voice handler')
+    }
+  })
+
+  bot.on('message:video', async (ctx) => {
+    try {
+      const chatId = String(ctx.chat!.id)
+      if (!isAuthorised(chatId)) { await guardedReply(ctx, 'Unauthorised.'); return }
+      touchActivity()
+      if (!checkRateLimit(chatId)) { await guardedReply(ctx, 'Rate limit exceeded.'); return }
+      const caption = guardContent(ctx.message.caption || 'Analyze this video')
+      await guardedReply(ctx, 'Video received. Processing...')
+      await guardedEnqueue(chatId, ctx, async () => {
+        await handleUserMessage(ctx, chatId, `[Video] ${caption}`)
+      })
+    } catch (err) {
+      logger.error({ err: (err as Error).message }, 'Unhandled error in video handler')
+    }
   })
 
   return bot
@@ -283,77 +556,61 @@ function isAuthorised(chatId: string): boolean {
   return ALLOWED_CHAT_ID.split(',').map(id => id.trim()).includes(chatId)
 }
 
-async function handleTextMessage(ctx: Context, chatId: string, text: string): Promise<void> {
-  const typingInterval = getTypingIndicator(ctx)
-  let agentId = 'main'
-  let promptText = text
+async function handleUserMessage(ctx: Context, chatId: string, text: string): Promise<void> {
+  const recentTurns = getRecentTurns(chatId, 'main', 6) as Array<{ role: string; content: string }>
+  const messages: AgentMessage[] = [
+    ...recentTurns.map(t => ({ role: t.role as 'user' | 'assistant', content: t.content })),
+    { role: 'user', content: text },
+  ]
 
-  const delegation = isDelegationRequest(text)
-  if (delegation) {
-    agentId = delegation.agentId
-    promptText = delegation.prompt
-  } else {
-    const catalog = buildAgentCatalog()
-    const routing = await classifyIntent(text, catalog)
-    if (routing.agentId !== 'main' && routing.confidence !== 'low') {
-      agentId = routing.agentId
-      promptText = routing.prompt
-      const targetName = getAgent(agentId)?.name || agentId
-      ctx.reply(`\u21b3 *Routing to ${targetName}...*`, { parse_mode: 'Markdown' }).catch(() => {})
-    }
-  }
+  chatEvents.emit('user_message', { chatId, agentId: 'main', data: text, timestamp: Date.now() })
+
+  const abortController = new AbortController()
+  abortControllers.set(chatId, abortController)
+
+  const timeoutMs = 60000
+  const timeoutId = setTimeout(() => abortController.abort(), timeoutMs)
 
   try {
-    const sessionId = getSession(chatId, agentId)
-    let systemPrompt = 'You are OpenCode OS, a personal AI assistant accessible via Telegram.\nRespond concisely and helpfully.'
-    const agentCfg = getAgent(agentId)
-    if (agentCfg) {
-      systemPrompt = agentCfg.personality
+    const complexity = classifyComplexity(text)
+    let result: { text: string; sessionId?: string }
+
+    if (complexity === 'direct') {
+      result = await respondDirect({ messages, chatId, signal: abortController.signal })
+    } else {
+      result = await runOrchestrator({ messages, chatId, signal: abortController.signal })
     }
 
-    const recentTurns = getRecentTurns(chatId, agentId, 10) as Array<{ role: string; content: string }>
-    const messages: AgentMessage[] = [
-      ...recentTurns.map(t => ({ role: t.role as 'user' | 'assistant', content: t.content })),
-      { role: 'user', content: promptText }
-    ]
-
-    chatEvents.emit('user_message', { chatId, agentId, data: text, timestamp: Date.now() })
-
-    const abortController = new AbortController()
-    abortControllers.set(chatId, abortController)
-
-    const result: AgentResult = await queryAgent({
-      messages,
-      sessionId,
-      agentId,
-      systemPrompt,
-      signal: abortController.signal,
-    })
-
+    clearTimeout(timeoutId)
     abortControllers.delete(chatId)
 
     const responseText = result.text || 'No response generated.'
-    const footer = formatCostFooter(result.model || 'unknown', result.inputTokens || 0, result.outputTokens || 0, SHOW_COST_FOOTER)
 
-    const finalText = footer ? `${responseText}\n\n${footer}` : responseText
+    insertTurn(chatId, 'user', text, 'main')
+    insertTurn(chatId, 'assistant', responseText, 'main')
+    chatEvents.emit('assistant_message', { chatId, agentId: 'main', data: responseText, timestamp: Date.now() })
 
-    insertTurn(chatId, 'user', promptText, agentId)
-    insertTurn(chatId, 'assistant', responseText, agentId)
-
-    chatEvents.emit('assistant_message', { chatId, agentId, data: responseText, timestamp: Date.now() })
-
-    clearInterval(typingInterval!)
-
-    const parts = splitMessage(finalText)
+    const parts = splitMessage(responseText)
     for (const part of parts) {
-      await ctx.reply(formatForTelegram(part), { parse_mode: 'HTML' })
+      await ctx.reply(formatForTelegram(part), { parse_mode: 'HTML' }).catch(() => {})
+    }
+
+    if (result.sessionId) {
+      await ctx.reply(
+        `📋 I'll track progress and report back when tasks complete. Use /status to check anytime.`
+      ).catch(() => {})
     }
 
   } catch (err: unknown) {
-    clearInterval(typingInterval!)
+    clearTimeout(timeoutId)
+    abortControllers.delete(chatId)
     const msg = (err as Error).message
+    const isTimeout = abortController.signal.aborted && msg.includes('abort')
+    const userMsg = isTimeout
+      ? 'The request timed out. Try breaking it into smaller steps.'
+      : `Error: ${msg}`
     logger.error({ chatId, err: msg }, 'Message handling failed')
-    chatEvents.emit('error', { chatId, agentId, data: msg, timestamp: Date.now() })
-    ctx.reply(`Error: ${msg}`).catch(() => {})
+    chatEvents.emit('error', { chatId, agentId: 'main', data: msg, timestamp: Date.now() })
+    ctx.reply(userMsg).catch(() => {})
   }
 }

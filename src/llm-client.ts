@@ -16,3 +16,11 @@ export function getClient(): OpenAI {
 export function getModel(): string {
   return OPENCODE_MODEL
 }
+
+export function resetClient(): void {
+  client = null
+}
+
+export function getClientStatus(): boolean {
+  return client !== null
+}

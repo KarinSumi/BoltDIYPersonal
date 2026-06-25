@@ -23,6 +23,11 @@ export function getDb(): DatabaseSync {
   return db
 }
 
+function hasColumn(table: string, column: string): boolean {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+  return cols.some(c => c.name === column)
+}
+
 function runMigrations(): void {
   const existing = db.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all() as { name: string }[]
   const tables = new Set(existing.map(r => r.name))
@@ -34,60 +39,6 @@ function runMigrations(): void {
       session_id TEXT NOT NULL,
       updated_at INTEGER NOT NULL,
       PRIMARY KEY (chat_id, agent_id)
-    )`)
-  }
-
-  if (!tables.has('memories')) {
-    db.exec(`CREATE TABLE memories (
-      id TEXT PRIMARY KEY,
-      chat_id TEXT NOT NULL,
-      agent_id TEXT NOT NULL DEFAULT 'main',
-      summary TEXT NOT NULL,
-      raw_text TEXT,
-      entities TEXT,
-      topics TEXT,
-      importance REAL NOT NULL DEFAULT 0.5,
-      salience REAL NOT NULL DEFAULT 1.0,
-      pinned INTEGER NOT NULL DEFAULT 0,
-      superseded_by TEXT,
-      consolidated INTEGER NOT NULL DEFAULT 0,
-      embedding TEXT,
-      created_at TEXT NOT NULL,
-      last_accessed TEXT
-    )`)
-  }
-
-  if (!tables.has('memories_fts')) {
-    db.exec(`CREATE VIRTUAL TABLE memories_fts USING fts5(
-      summary, raw_text, entities, topics,
-      content='memories',
-      content_rowid='rowid'
-    )`)
-    db.exec(`CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN
-      INSERT INTO memories_fts(rowid, summary, raw_text, entities, topics)
-      VALUES (new.rowid, new.summary, new.raw_text, new.entities, new.topics);
-    END`)
-    db.exec(`CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN
-      INSERT INTO memories_fts(memories_fts, rowid, summary, raw_text, entities, topics)
-      VALUES ('delete', old.rowid, old.summary, old.raw_text, old.entities, old.topics);
-    END`)
-    db.exec(`CREATE TRIGGER memories_au AFTER UPDATE OF summary, raw_text, entities, topics ON memories BEGIN
-      INSERT INTO memories_fts(memories_fts, rowid, summary, raw_text, entities, topics)
-      VALUES ('delete', old.rowid, old.summary, old.raw_text, old.entities, old.topics);
-      INSERT INTO memories_fts(rowid, summary, raw_text, entities, topics)
-      VALUES (new.rowid, new.summary, new.raw_text, new.entities, new.topics);
-    END`)
-  }
-
-  if (!tables.has('consolidations')) {
-    db.exec(`CREATE TABLE consolidations (
-      id TEXT PRIMARY KEY,
-      agent_id TEXT NOT NULL DEFAULT 'main',
-      insights TEXT NOT NULL,
-      patterns TEXT,
-      contradictions TEXT,
-      memory_ids TEXT,
-      created_at TEXT NOT NULL
     )`)
   }
 
@@ -109,10 +60,31 @@ function runMigrations(): void {
       from_agent TEXT NOT NULL,
       to_agent TEXT NOT NULL,
       prompt TEXT NOT NULL,
+      title TEXT,
+      session_id TEXT,
+      progress INTEGER NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'pending',
       result TEXT,
       created_at TEXT NOT NULL,
       completed_at TEXT
+    )`)
+  } else {
+    if (!hasColumn('inter_agent_tasks', 'session_id')) db.exec('ALTER TABLE inter_agent_tasks ADD COLUMN session_id TEXT')
+    if (!hasColumn('inter_agent_tasks', 'title')) db.exec('ALTER TABLE inter_agent_tasks ADD COLUMN title TEXT')
+    if (!hasColumn('inter_agent_tasks', 'progress')) db.exec('ALTER TABLE inter_agent_tasks ADD COLUMN progress INTEGER NOT NULL DEFAULT 0')
+  }
+
+  if (!tables.has('delegation_sessions')) {
+    db.exec(`CREATE TABLE delegation_sessions (
+      id TEXT PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      user_request TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      summary TEXT,
+      task_count INTEGER NOT NULL DEFAULT 0,
+      completed_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
     )`)
   }
 
@@ -185,6 +157,62 @@ function runMigrations(): void {
       created_at INTEGER NOT NULL
     )`)
   }
+
+  if (!tables.has('kanban_boards')) {
+    db.exec(`CREATE TABLE kanban_boards (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT,
+      status TEXT DEFAULT 'active',
+      priority INTEGER DEFAULT 3,
+      owner TEXT NOT NULL,
+      summary TEXT,
+      task_count INTEGER DEFAULT 0,
+      completed_count INTEGER DEFAULT 0,
+      progress_pct INTEGER DEFAULT 0,
+      created_at TEXT,
+      updated_at TEXT
+    )`)
+  }
+
+  if (!tables.has('kanban_tasks')) {
+    db.exec(`CREATE TABLE kanban_tasks (
+      id TEXT PRIMARY KEY,
+      board_id TEXT NOT NULL,
+      parent_task_id TEXT,
+      title TEXT NOT NULL,
+      prompt TEXT,
+      assignee TEXT,
+      status TEXT DEFAULT 'triage',
+      priority INTEGER DEFAULT 3,
+      depends_on TEXT,
+      retry_count INTEGER DEFAULT 0,
+      max_retries INTEGER DEFAULT 2,
+      progress INTEGER DEFAULT 0,
+      result TEXT,
+      error TEXT,
+      started_at TEXT,
+      completed_at TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    )`)
+  }
+
+  if (!tables.has('agent_sessions')) {
+    db.exec(`CREATE TABLE agent_sessions (
+      agent_id TEXT PRIMARY KEY,
+      status TEXT DEFAULT 'idle',
+      current_task_id TEXT,
+      consecutive_failures INTEGER DEFAULT 0,
+      skills TEXT,
+      progress INTEGER DEFAULT 0,
+      task_count INTEGER DEFAULT 0,
+      completed_count INTEGER DEFAULT 0,
+      last_heartbeat TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    )`)
+  }
 }
 
 // Sessions
@@ -201,83 +229,16 @@ export function clearSession(chatId: string, agentId = 'main'): void {
   db.prepare('DELETE FROM sessions WHERE chat_id = ? AND agent_id = ?').run(chatId, agentId)
 }
 
-// Memories
-export function insertMemory(mem: {
-  id: string; chat_id: string; agent_id: string; summary: string; raw_text?: string
-  entities?: string; topics?: string; importance: number; salience: number; embedding?: string
-}): void {
-  db.prepare(`INSERT INTO memories (id, chat_id, agent_id, summary, raw_text, entities, topics, importance, salience, embedding, created_at, last_accessed)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`).run(
-    mem.id, mem.chat_id, mem.agent_id, mem.summary, mem.raw_text ?? null,
-    mem.entities ?? null, mem.topics ?? null, mem.importance, mem.salience, mem.embedding ?? null
-  )
-}
-
-export function getMemoriesByAgent(agentId: string, limit = 50): unknown[] {
-  return db.prepare('SELECT * FROM memories WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?').all(agentId, limit)
-}
-
-export function getUnconsolidatedMemories(agentId: string, limit = 20): unknown[] {
-  return db.prepare('SELECT * FROM memories WHERE agent_id = ? AND consolidated = 0 LIMIT ?').all(agentId, limit)
-}
-
-export function markMemoriesConsolidated(ids: string[]): void {
-  const stmt = db.prepare('UPDATE memories SET consolidated = 1 WHERE id = ?')
-  for (const id of ids) stmt.run(id)
-}
-
-export function searchMemoriesFTS(query: string, agentId: string, limit = 5): unknown[] {
-  return db.prepare(`SELECT m.* FROM memories m JOIN memories_fts f ON m.rowid = f.rowid
-    WHERE memories_fts MATCH ? AND m.agent_id = ? ORDER BY rank LIMIT ?`).all(query, agentId, limit)
-}
-
-export function getAllEmbeddings(agentId: string): { id: string; embedding: string }[] {
-  return db.prepare('SELECT id, embedding FROM memories WHERE agent_id = ? AND embedding IS NOT NULL').all(agentId) as { id: string; embedding: string }[]
-}
-
-export function updateSalience(id: string, newValue: number): void {
-  db.prepare('UPDATE memories SET salience = ?, last_accessed = datetime(\'now\') WHERE id = ?').run(newValue, id)
-}
-
-export function pinMemory(id: string): void {
-  db.prepare('UPDATE memories SET pinned = 1 WHERE id = ?').run(id)
-}
-
-export function unpinMemory(id: string): void {
-  db.prepare('UPDATE memories SET pinned = 0 WHERE id = ?').run(id)
-}
-
-export function setSupersededBy(oldId: string, newId: string): void {
-  db.prepare('UPDATE memories SET superseded_by = ? WHERE id = ?').run(newId, oldId)
-}
-
-export function runSalienceDecay(): void {
-  db.exec(`UPDATE memories SET salience = ROUND(salience * CASE
-    WHEN pinned = 1 THEN 1.0
-    WHEN importance >= 0.8 THEN 0.99
-    WHEN importance >= 0.5 THEN 0.98
-    ELSE 0.95
-  END, 4)`)
-  db.exec('DELETE FROM memories WHERE salience < 0.05')
-}
-
-export function searchConversationHistory(keywords: string, agentId: string, dayWindow = 7, limit = 10): unknown[] {
-  const cutoff = Date.now() - (dayWindow * 86400 * 1000)
-  return db.prepare(`SELECT * FROM turns WHERE agent_id = ? AND created_at > ? AND content LIKE ?
-    ORDER BY created_at DESC LIMIT ?`).all(agentId, cutoff, `%${keywords}%`, limit)
-}
-
-export function insertConsolidation(result: {
-  id: string; agent_id: string; insights: string; patterns?: string; contradictions?: string; memory_ids: string
-}): void {
-  db.prepare(`INSERT INTO consolidations (id, agent_id, insights, patterns, contradictions, memory_ids, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`).run(
-    result.id, result.agent_id, result.insights, result.patterns ?? null,
-    result.contradictions ?? null, result.memory_ids
-  )
+// Memories (stub — memory system removed, table may not exist)
+export function getMemoriesByAgent(_agentId: string, _limit = 50): unknown[] {
+  return []
 }
 
 // Hive Mind
+export function runSalienceDecay(): void {
+  // no-op: memory system removed
+}
+
 export function insertHiveEntry(entry: { id: string; agent_id: string; chat_id?: string; action: string; summary: string; artifacts?: string }): void {
   db.prepare(`INSERT INTO hive_mind (id, agent_id, chat_id, action, summary, artifacts, created_at)
     VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`).run(
@@ -297,10 +258,6 @@ export function insertInterAgentTask(task: { id: string; from_agent: string; to_
 
 export function getTasksForAgent(agentId: string): unknown[] {
   return db.prepare('SELECT * FROM inter_agent_tasks WHERE to_agent = ? AND status = \'pending\' ORDER BY created_at ASC').all(agentId)
-}
-
-export function completeTask(taskId: string, result: string): void {
-  db.prepare('UPDATE inter_agent_tasks SET status = \'completed\', result = ?, completed_at = datetime(\'now\') WHERE id = ?').run(result, taskId)
 }
 
 // Scheduled Tasks
@@ -413,4 +370,57 @@ export function getActiveMeetSessions(): unknown[] {
 
 export function listMeetSessions(limit = 20): unknown[] {
   return db.prepare('SELECT * FROM meet_sessions ORDER BY created_at DESC LIMIT ?').all(limit)
+}
+
+// Delegation Sessions
+export function createDelegationSession(session: {
+  id: string; chat_id: string; user_request: string
+}): void {
+  db.prepare(`INSERT INTO delegation_sessions (id, chat_id, user_request, status, created_at, updated_at)
+    VALUES (?, ?, ?, 'active', datetime('now'), datetime('now'))`).run(session.id, session.chat_id, session.user_request)
+}
+
+export function getDelegationSession(id: string): Record<string, unknown> | undefined {
+  return db.prepare('SELECT * FROM delegation_sessions WHERE id = ?').get(id) as Record<string, unknown> | undefined
+}
+
+export function updateDelegationSessionStatus(id: string, status: string): void {
+  db.prepare("UPDATE delegation_sessions SET status = ?, updated_at = datetime('now') WHERE id = ?").run(status, id)
+}
+
+export function updateDelegationSessionCounts(id: string): void {
+  db.prepare(`UPDATE delegation_sessions SET
+    task_count = (SELECT COUNT(*) FROM inter_agent_tasks WHERE session_id = ?),
+    completed_count = (SELECT COUNT(*) FROM inter_agent_tasks WHERE session_id = ? AND status = 'completed'),
+    updated_at = datetime('now')
+    WHERE id = ?`).run(id, id, id)
+}
+
+export function getActiveDelegationSessions(): Record<string, unknown>[] {
+  return db.prepare("SELECT * FROM delegation_sessions WHERE status = 'active' ORDER BY created_at DESC").all() as Record<string, unknown>[]
+}
+
+export function delegateTask(task: {
+  id: string; from_agent: string; to_agent: string; prompt: string; session_id: string; title?: string
+}): void {
+  db.prepare(`INSERT INTO inter_agent_tasks (id, from_agent, to_agent, prompt, title, session_id, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, 'pending', datetime('now'))`).run(
+    task.id, task.from_agent, task.to_agent, task.prompt, task.title ?? null, task.session_id
+  )
+}
+
+export function getSessionTasks(sessionId: string): Record<string, unknown>[] {
+  return db.prepare('SELECT * FROM inter_agent_tasks WHERE session_id = ? ORDER BY created_at ASC').all(sessionId) as Record<string, unknown>[]
+}
+
+export function getPendingTasks(): Record<string, unknown>[] {
+  return db.prepare("SELECT * FROM inter_agent_tasks WHERE status = 'pending' ORDER BY created_at ASC LIMIT 5").all() as Record<string, unknown>[]
+}
+
+export function claimTask(taskId: string): void {
+  db.prepare("UPDATE inter_agent_tasks SET status = 'running' WHERE id = ? AND status = 'pending'").run(taskId)
+}
+
+export function completeTask(taskId: string, result: string): void {
+  db.prepare("UPDATE inter_agent_tasks SET status = 'completed', result = ?, progress = 100, completed_at = datetime('now') WHERE id = ?").run(result, taskId)
 }

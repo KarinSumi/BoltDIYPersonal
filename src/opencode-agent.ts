@@ -7,6 +7,7 @@ import { AGENT_MAX_TURNS } from './config.js'
 import { logger } from './logger.js'
 
 import type OpenAI from 'openai'
+export type { OpenAI }
 
 export interface AgentMessage {
   role: 'system' | 'user' | 'assistant'
@@ -21,6 +22,7 @@ export interface AgentOptions {
   onTyping?: () => void
   maxTurns?: number
   signal?: AbortSignal
+  tools?: OpenAI.Chat.Completions.ChatCompletionTool[]
 }
 
 export interface ToolCall {
@@ -242,11 +244,13 @@ Respond concisely and helpfully.`
     turns++
     if (options.onTyping) options.onTyping()
 
+    const tools = options.tools !== undefined ? options.tools : availableTools
+
     const completion = await client.chat.completions.create({
       model,
       messages,
-      tools: availableTools,
-      tool_choice: 'auto',
+      tools: tools.length > 0 ? tools : undefined,
+      tool_choice: tools.length > 0 ? 'auto' : undefined,
       max_tokens: 4096,
     }, { signal: options.signal })
 

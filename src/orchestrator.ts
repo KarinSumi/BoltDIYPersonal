@@ -147,17 +147,135 @@ export function deleteAgent(id: string): boolean {
   return agents.delete(id)
 }
 
+// Delegation session helpers
+import {
+  createBoard as kanbanCreateBoard,
+  getBoard as kanbanGetBoard,
+  listBoards as kanbanListBoards,
+  archiveBoard as kanbanArchiveBoard,
+  createTask as kanbanCreateTask,
+  getTask as kanbanGetTask,
+  listTasks as kanbanListTasks,
+  updateTask as kanbanUpdateTask,
+  cancelTask as kanbanCancelTask,
+} from './kanban-db.js'
+import type { Board, Task } from './kanban-db.js'
+import {
+  createDelegationSession as dbCreateSession,
+  getDelegationSession as dbGetSession,
+  updateDelegationSessionStatus as dbUpdateSessionStatus,
+  updateDelegationSessionCounts as dbUpdateSessionCounts,
+  getActiveDelegationSessions as dbGetActiveSessions,
+  delegateTask as dbDelegateTask,
+  getSessionTasks as dbGetSessionTasks,
+  getPendingTasks as dbGetPendingTasks,
+  claimTask as dbClaimTask,
+  completeTask as dbCompleteTask,
+} from './db.js'
+
+// ── Legacy delegation helpers (used by progress-reporter, task-worker, old tests) ──
+
+export function createSession(chatId: string, userRequest: string): string {
+  const id = uuid()
+  dbCreateSession({ id, chat_id: chatId, user_request: userRequest })
+  return id
+}
+
+export function getDelegationSession(id: string): Record<string, unknown> | undefined {
+  return dbGetSession(id)
+}
+
+export function updateSessionStatus(id: string, status: string): void {
+  dbUpdateSessionStatus(id, status)
+}
+
+export function updateSessionCounts(id: string): void {
+  dbUpdateSessionCounts(id)
+}
+
+export function getActiveSessions(): Record<string, unknown>[] {
+  return dbGetActiveSessions()
+}
+
+export function createDelegateTask(fromAgent: string, toAgent: string, prompt: string, sessionId: string, title?: string): string {
+  const id = uuid()
+  dbDelegateTask({ id, from_agent: fromAgent, to_agent: toAgent, prompt, session_id: sessionId, title })
+  return id
+}
+
+export function listSessionTasks(sessionId: string): Record<string, unknown>[] {
+  return dbGetSessionTasks(sessionId)
+}
+
+export function listPendingTasks(): Record<string, unknown>[] {
+  return dbGetPendingTasks()
+}
+
+export function claimPendingTask(taskId: string): void {
+  dbClaimTask(taskId)
+}
+
+export function finishTask(taskId: string, result: string): void {
+  dbCompleteTask(taskId, result)
+}
+
+// ── Kanban helpers ──
+
+export function createKanbanBoard(title: string, description: string | undefined, priority: number | undefined, owner: string): string {
+  return kanbanCreateBoard({ title, description, priority, owner })
+}
+
+export function getKanbanBoard(id: string): Board | undefined {
+  return kanbanGetBoard(id)
+}
+
+export function listKanbanBoards(owner: string, status?: string): Board[] {
+  return kanbanListBoards(owner, status)
+}
+
+export function archiveKanbanBoard(id: string, summary?: string): void {
+  kanbanArchiveBoard(id, summary)
+}
+
+export function createKanbanTask(boardId: string, title: string, prompt: string, assignee?: string, priority?: number, dependsOn?: string): string {
+  return kanbanCreateTask({ board_id: boardId, title, prompt, assignee, priority, depends_on: dependsOn })
+}
+
+export function getKanbanTask(id: string): Task | undefined {
+  return kanbanGetTask(id)
+}
+
+export function listKanbanTasks(boardId: string): Task[] {
+  return kanbanListTasks(boardId)
+}
+
+export function setKanbanTaskStatus(taskId: string, status: string, result?: string): void {
+  const changes: Record<string, unknown> = { status }
+  if (result !== undefined) changes.result = result
+  kanbanUpdateTask(taskId, changes)
+}
+
+export function cancelKanbanTask(taskId: string): void {
+  kanbanCancelTask(taskId)
+}
+
+export function getBoardProgress(boardId: string): number {
+  const board = kanbanGetBoard(boardId)
+  return board?.progress_pct ?? 0
+}
+
 export function registerMainAgent(): void {
   scanAndCacheAgents()
-  if (!agents.has('main')) {
-    registerAgent({
-      id: 'main',
-      name: 'Main Assistant',
-      model: 'deepseek-ai/deepseek-v4-flash',
-      personality: 'You are OpenCode OS Coordinator, the primary interface between the user and a team of specialist agents. Your job: handle general conversation, and when a task requires specialized skills, use @agent syntax in your response to suggest delegation. Available agents: dev (code), research (web research), sysops (system admin), writer (documentation). Respond concisely and helpfully.',
-      cwd: '.',
-      mcpServers: ['Bash', 'Read', 'Write', 'Grep', 'Glob', 'Web'],
-      capabilities: ['general chat', 'coordination', 'task routing'],
-    })
-  }
+
+  if (diskAgentCache.has('main') || agents.has('main')) return
+
+  registerAgent({
+    id: 'main',
+    name: 'Master Orchestrator',
+    model: 'deepseek-ai/deepseek-v4-flash',
+    personality: 'You are the Master Orchestrator of OpenCode OS. You are the user\'s sole interface. You decide when and how to delegate work to specialist agents. Your job: listen and clarify, judge complexity (simple = direct, complex = delegate), assign sub-tasks to agents like dev/frontend, research/web, sysops/deploy, writer/doc, track progress, and report back. Available agents: dev (code), research (web), sysops (admin), writer (docs). Respond concisely.',
+    cwd: '.',
+    mcpServers: ['Bash', 'Read', 'Write', 'Grep', 'Glob', 'Web'],
+    capabilities: ['orchestration', 'task decomposition', 'delegation', 'general chat'],
+  })
 }

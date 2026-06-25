@@ -3,9 +3,10 @@ import { serve } from '@hono/node-server'
 import { DASHBOARD_TOKEN, DASHBOARD_PORT } from './config.js'
 import { getMemoriesByAgent, getRecentHiveEntries, getAuditEntries, listMissions, listScheduledTasks } from './db.js'
 import { listAgents } from './orchestrator.js'
-import { chatEvents } from './state.js'
 import { getDashboardHTML } from './dashboard-html.js'
 import { logger } from './logger.js'
+import { subscribeToSSE, getRecentActivity } from './events.js'
+import { getAllAgentSessions, listAllBoards, listTasks, getBoard } from './kanban-db.js'
 
 export function startDashboard(): void {
   if (!DASHBOARD_TOKEN) {
@@ -58,8 +59,71 @@ export function startDashboard(): void {
     })
   })
 
+  app.get('/api/activity', (c) => {
+    const limit = parseInt(c.req.query('limit') || '50')
+    return c.json(getRecentActivity(limit))
+  })
+
+  app.get('/api/kanban/boards', (c) => {
+    const status = c.req.query('status') || undefined
+    return c.json(listAllBoards(status))
+  })
+
+  app.get('/api/kanban/board/:id', (c) => {
+    const board = getBoard(c.req.param('id'))
+    if (!board) { c.status(404); return c.json({ error: 'Board not found' }) }
+    const tasks = listTasks(c.req.param('id'))
+    return c.json({ board, tasks })
+  })
+
+  app.get('/api/agents/status', (c) => {
+    return c.json(getAllAgentSessions())
+  })
+
   app.get('/api/events', (c) => {
-    return c.json({ status: 'ok', message: 'SSE endpoint' })
+    c.header('Content-Type', 'text/event-stream')
+    c.header('Cache-Control', 'no-cache')
+    c.header('Connection', 'keep-alive')
+
+    const raw = c.req.raw as unknown as import('events').EventEmitter
+    let closed = false
+    const encoder = new TextEncoder()
+
+    const stream = new ReadableStream({
+      start(controller) {
+        const unsubscribe = subscribeToSSE((event, data) => {
+          if (!closed) {
+            try {
+              controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
+            } catch { /* ignore if stream closed */ }
+          }
+        })
+
+        controller.enqueue(encoder.encode(`event: connected\ndata: {}\n\n`))
+
+        const keepAlive = setInterval(() => {
+          if (!closed) {
+            try {
+              controller.enqueue(encoder.encode(`:keepalive\n\n`))
+            } catch {
+              clearInterval(keepAlive)
+            }
+          }
+        }, 15000)
+
+        const cleanup = () => {
+          closed = true
+          unsubscribe()
+          clearInterval(keepAlive)
+          try { controller.close() } catch { /* ignore if already closed */ }
+        }
+
+        raw.on('close', cleanup)
+        raw.on('error', cleanup)
+      },
+    })
+
+    return c.body(stream)
   })
 
   app.get('/', (c) => {
