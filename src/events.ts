@@ -6,6 +6,7 @@ type SSECallback = (event: string, data: unknown) => void
 const sseClients = new Set<SSECallback>()
 const bus = new EventEmitter()
 bus.setMaxListeners(100)
+bus.on('error', () => {})
 
 export interface ActivityEntry {
   timestamp: number

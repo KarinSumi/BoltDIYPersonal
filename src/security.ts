@@ -20,6 +20,7 @@ export function verifyPin(input: string, storedHash: string): boolean {
 }
 
 export function isLocked(): boolean {
+  if (!SECURITY_PIN_HASH) return false
   return isSystemLocked
 }
 
@@ -37,12 +38,14 @@ export function unlock(pin: string): boolean {
 }
 
 export function lock(): void {
+  if (!SECURITY_PIN_HASH) return
   setLocked(true)
   insertAuditEntry({ agent_id: 'system', chat_id: 'system', action: 'lock', detail: 'System locked' })
   logger.info('System locked')
 }
 
 export function resetIdleTimer(): void {
+  if (!SECURITY_PIN_HASH) return
   if (idleTimer) clearTimeout(idleTimer)
   idleTimer = setTimeout(() => {
     lock()

@@ -1,11 +1,11 @@
 import { Bot, Context } from 'grammy'
-import { TELEGRAM_BOT_TOKEN, ALLOWED_CHAT_ID, MAX_MESSAGE_LENGTH } from './config.js'
+import { TELEGRAM_BOT_TOKEN, ALLOWED_CHAT_ID, MAX_MESSAGE_LENGTH, SECURITY_PIN_HASH, AGENT_TIMEOUT_MS, TYPING_REFRESH_MS } from './config.js'
 import { AgentMessage } from './opencode-agent.js'
 import { clearSession, insertTurn, getRecentTurns } from './db.js'
 import { enqueue } from './message-queue.js'
 import { logger } from './logger.js'
 import { voiceEnabledChats, chatEvents, abortControllers } from './state.js'
-import { listAgents, listKanbanBoards, listKanbanTasks, getKanbanBoard, getKanbanTask } from './orchestrator.js'
+import { listAgents, listKanbanBoards, listKanbanTasks, getKanbanBoard, getKanbanTask, isDelegationRequest, getAgent, createKanbanBoard, createKanbanTask, setKanbanTaskStatus } from './orchestrator.js'
 import { classifyComplexity, runOrchestrator, respondDirect } from './master-orchestrator.js'
 import { isLocked, lock, unlock, checkKillPhrase, resetIdleTimer } from './security.js'
 import { touchActivity } from './state.js'
@@ -182,6 +182,7 @@ export function createBot(): Bot {
 
   bot.command('pin', (ctx) => {
     if (!isAuthorisedChat(ctx)) return
+    if (!SECURITY_PIN_HASH) { ctx.reply('PIN not configured. Set SECURITY_PIN_HASH in .env to enable PIN locking.'); return }
     const code = ctx.match?.trim()
     if (!code) {
       ctx.reply('Usage: /pin <code>')
@@ -280,6 +281,7 @@ export function createBot(): Bot {
 
   bot.command('lock', (ctx) => {
     if (!isAuthorisedChat(ctx)) return
+    if (!SECURITY_PIN_HASH) { ctx.reply('PIN not configured. Set SECURITY_PIN_HASH in .env to enable locking.'); return }
     lock()
     ctx.reply('System locked. Send your PIN to unlock.')
   })
@@ -565,10 +567,31 @@ async function handleUserMessage(ctx: Context, chatId: string, text: string): Pr
 
   chatEvents.emit('user_message', { chatId, agentId: 'main', data: text, timestamp: Date.now() })
 
+  // ── Typing indicator ──
+  const typingInterval = setInterval(() => {
+    ctx.api.sendChatAction(chatId, 'typing').catch(() => {})
+  }, TYPING_REFRESH_MS)
+
+  // ── Check @agent delegation ──
+  const delegation = isDelegationRequest(text)
+  if (delegation) {
+    const agent = getAgent(delegation.agentId)
+    if (agent) {
+      clearInterval(typingInterval)
+      const boardId = createKanbanBoardForAgent(chatId, delegation.agentId, delegation.prompt)
+      await ctx.reply(
+        `Delegating to **${agent.name}**: "${delegation.prompt.slice(0, 100)}${delegation.prompt.length > 100 ? '...' : ''}"\n\n` +
+        `I'll post the result here once it's done. Use /board \`${boardId.slice(0, 8)}\` to check progress.`,
+        { parse_mode: 'Markdown' }
+      ).catch(() => {})
+      return
+    }
+  }
+
   const abortController = new AbortController()
   abortControllers.set(chatId, abortController)
 
-  const timeoutMs = 60000
+  const timeoutMs = AGENT_TIMEOUT_MS
   const timeoutId = setTimeout(() => abortController.abort(), timeoutMs)
 
   try {
@@ -582,6 +605,7 @@ async function handleUserMessage(ctx: Context, chatId: string, text: string): Pr
     }
 
     clearTimeout(timeoutId)
+    clearInterval(typingInterval)
     abortControllers.delete(chatId)
 
     const responseText = result.text || 'No response generated.'
@@ -603,6 +627,7 @@ async function handleUserMessage(ctx: Context, chatId: string, text: string): Pr
 
   } catch (err: unknown) {
     clearTimeout(timeoutId)
+    clearInterval(typingInterval)
     abortControllers.delete(chatId)
     const msg = (err as Error).message
     const isTimeout = abortController.signal.aborted && msg.includes('abort')
@@ -611,6 +636,18 @@ async function handleUserMessage(ctx: Context, chatId: string, text: string): Pr
       : `Error: ${msg}`
     logger.error({ chatId, err: msg }, 'Message handling failed')
     chatEvents.emit('error', { chatId, agentId: 'main', data: msg, timestamp: Date.now() })
-    ctx.reply(userMsg).catch(() => {})
+    await ctx.reply(userMsg).catch(() => {})
   }
+}
+
+function createKanbanBoardForAgent(chatId: string, agentId: string, prompt: string): string {
+  const boardId = createKanbanBoard(
+    `Task for ${agentId}: ${prompt.slice(0, 60)}`,
+    undefined,
+    3,
+    chatId
+  )
+  const taskId = createKanbanTask(boardId, prompt.slice(0, 80), prompt, agentId, 3)
+  setKanbanTaskStatus(taskId, 'running')
+  return boardId
 }
