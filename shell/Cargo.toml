@@ -1,0 +1,18 @@
+[package]
+name = "opencode-shell"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tao = "0.35"
+wry = "0.55"
+tray-icon = "0.24"
+image = "0.25"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = "0.3"
+objc2-foundation = "0.3"

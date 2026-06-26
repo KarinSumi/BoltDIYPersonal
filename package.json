@@ -17,7 +17,7 @@
     "warroom:bundle": "npx esbuild warroom/client.js --bundle --outfile=warroom/client.bundle.js --format=esm",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
     "pm2:stop": "pm2 stop opencode-os",
     "pm2:restart": "pm2 restart opencode-os",
     "pm2:logs": "pm2 logs opencode-os",
@@ -32,13 +32,15 @@
     "@hono/node-server": "^1.0.0",
     "cron-parser": "^4.9.0",
     "glob": "^13.0.6",
+    "googlethis": "^1.8.0",
     "grammy": "^1.26.0",
     "hono": "^4.0.0",
     "js-yaml": "^4.1.0",
     "openai": "^4.50.0",
     "pino": "^9.0.0",
     "pino-pretty": "^11.0.0",
-    "uuid": "^10.0.0"
+    "uuid": "^10.0.0",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",

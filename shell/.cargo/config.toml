@@ -1,0 +1,3 @@
+[target.x86_64-pc-windows-gnu]
+linker = "C:\\Users\\karin.r\\.mingw\\llvm-mingw-20260602-ucrt-x86_64\\bin\\x86_64-w64-mingw32-gcc.exe"
+ar = "C:\\Users\\karin.r\\.mingw\\llvm-mingw-20260602-ucrt-x86_64\\bin\\llvm-ar.exe"

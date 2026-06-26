@@ -6,3 +6,5 @@ workspace/
 outputs/meet_briefs/
 *.log
 *.pid
+shell/target/
+
