@@ -1,5 +1,5 @@
 import { getActiveSessions, listSessionTasks, updateSessionCounts, updateSessionStatus } from './orchestrator.js'
-import { TELEGRAM_BOT_TOKEN, ALLOWED_CHAT_ID } from './config.js'
+import { sendTelegramMessage as tgSendMessage, getAllowedChatIds } from './telegram.js'
 import { logger } from './logger.js'
 
 export interface SessionSummary {
@@ -19,8 +19,11 @@ export function startProgressReporter(): void {
   running = true
   logger.info('Progress reporter started (every 2 min)')
 
-  checkAndReport()
-  reportTimer = setInterval(() => checkAndReport(), 120000)
+  const jitter = Math.random() * 10000
+  setTimeout(() => {
+    checkAndReport()
+    reportTimer = setInterval(() => checkAndReport(), 120000)
+  }, jitter)
 }
 
 export function stopProgressReporter(): void {
@@ -88,26 +91,10 @@ async function checkAndReport(): Promise<void> {
 }
 
 async function sendTelegramMessage(text: string): Promise<void> {
-  if (!TELEGRAM_BOT_TOKEN) return
-
-  const chatIds = ALLOWED_CHAT_ID ? ALLOWED_CHAT_ID.split(',').map(id => id.trim()).filter(Boolean) : []
+  const chatIds = getAllowedChatIds()
   if (chatIds.length === 0) return
 
-  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`
-
   for (const chatId of chatIds) {
-    try {
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' }),
-      })
-      if (!resp.ok) {
-        const body = await resp.text()
-        logger.warn({ status: resp.status, body: body?.slice(0, 100) }, 'Telegram send failed')
-      }
-    } catch (err) {
-      logger.error({ err: (err as Error).message }, 'Failed to send progress update')
-    }
+    await tgSendMessage(chatId, text, 'Markdown')
   }
 }

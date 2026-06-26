@@ -2,6 +2,7 @@ import cronParser from 'cron-parser'
 const { parseExpression } = cronParser
 import { getDueTasks, markTaskRunning, updateTaskAfterRun, resetStuckTasks, getNextQueuedMission, completeMission } from './db.js'
 import { queryAgent } from './opencode-agent.js'
+import { classifyError } from './errors.js'
 import { logger } from './logger.js'
 
 type Sender = (chatId: string, text: string) => Promise<void>
@@ -12,10 +13,13 @@ export function initScheduler(send: Sender, agentId = 'main'): void {
   resetStuckTasks()
   logger.info('Scheduler initialized with 60s polling')
 
-  schedulerInterval = setInterval(async () => {
-    await processDueTasks(send, agentId)
-    await processMissions(agentId)
-  }, 60_000)
+  const jitter = Math.random() * 10000
+  setTimeout(() => {
+    schedulerInterval = setInterval(async () => {
+      await processDueTasks(send, agentId)
+      await processMissions(agentId)
+    }, 60_000)
+  }, jitter)
 }
 
 export function stopScheduler(): void {
@@ -54,8 +58,13 @@ async function processDueTasks(send: Sender, agentId: string): Promise<void> {
       await send(task.chat_id, `✅ Scheduled task completed:\n${result.text ?? 'No output'}`)
     } catch (err) {
       const msg = (err as Error).message
+      const { category, recovery } = classifyError(err as Error)
       updateTaskAfterRun(task.id, `Error: ${msg}`, task.schedule)
-      await send(task.chat_id, `❌ Task failed: ${msg}`)
+      if (category === 'rate_limit' || category === 'overloaded') {
+        logger.warn({ taskId: task.id, category, retryAfterMs: recovery.retryAfterMs }, 'Skipping failure send — transient error, will retry next tick')
+      } else {
+        await send(task.chat_id, `❌ Task failed: ${msg}`)
+      }
     }
   }
 }

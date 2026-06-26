@@ -4,6 +4,7 @@ import { dirname } from 'path'
 import { globSync } from 'glob'
 import { getClient, getModel } from './llm-client.js'
 import { AGENT_MAX_TURNS } from './config.js'
+import { classifyError } from './errors.js'
 import { logger } from './logger.js'
 
 import type OpenAI from 'openai'
@@ -218,6 +219,27 @@ async function executeToolCall(toolCall: ToolCall): Promise<string> {
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function retryOnRateLimit<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn()
+    } catch (err) {
+      const { category, recovery } = classifyError(err as Error)
+      if ((category === 'rate_limit' || category === 'overloaded') && attempt < maxRetries) {
+        const wait = recovery.retryAfterMs * Math.pow(2, attempt) + Math.random() * 1000
+        logger.warn({ category, attempt: attempt + 1, waitMs: Math.round(wait) }, 'LLM rate limited, retrying')
+        await sleep(wait)
+        continue
+      }
+      throw err
+    }
+  }
+}
+
 export async function queryAgent(options: AgentOptions): Promise<AgentResult> {
   const client = getClient()
   const model = getModel()
@@ -246,13 +268,15 @@ Respond concisely and helpfully.`
 
     const tools = options.tools !== undefined ? options.tools : availableTools
 
-    const completion = await client.chat.completions.create({
-      model,
-      messages,
-      tools: tools.length > 0 ? tools : undefined,
-      tool_choice: tools.length > 0 ? 'auto' : undefined,
-      max_tokens: 4096,
-    }, { signal: options.signal })
+    const completion = await retryOnRateLimit(() =>
+      client.chat.completions.create({
+        model,
+        messages,
+        tools: tools.length > 0 ? tools : undefined,
+        tool_choice: tools.length > 0 ? 'auto' : undefined,
+        max_tokens: 4096,
+      }, { signal: options.signal })
+    )
 
     const choice = completion.choices[0]
     totalInput += completion.usage?.prompt_tokens ?? 0

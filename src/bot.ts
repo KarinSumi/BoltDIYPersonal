@@ -63,6 +63,10 @@ function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
 function splitMessage(text: string, limit = MAX_MESSAGE_LENGTH): string[] {
   const parts: string[] = []
   while (text.length > limit) {
@@ -568,8 +572,12 @@ async function handleUserMessage(ctx: Context, chatId: string, text: string): Pr
   chatEvents.emit('user_message', { chatId, agentId: 'main', data: text, timestamp: Date.now() })
 
   // ── Typing indicator ──
+  let typingFailures = 0
   const typingInterval = setInterval(() => {
-    ctx.api.sendChatAction(chatId, 'typing').catch(() => {})
+    ctx.api.sendChatAction(chatId, 'typing').catch(() => {
+      typingFailures++
+      if (typingFailures >= 2) clearInterval(typingInterval)
+    })
   }, TYPING_REFRESH_MS)
 
   // ── Check @agent delegation ──
@@ -615,8 +623,9 @@ async function handleUserMessage(ctx: Context, chatId: string, text: string): Pr
     chatEvents.emit('assistant_message', { chatId, agentId: 'main', data: responseText, timestamp: Date.now() })
 
     const parts = splitMessage(responseText)
-    for (const part of parts) {
-      await ctx.reply(formatForTelegram(part), { parse_mode: 'HTML' }).catch(() => {})
+    for (let i = 0; i < parts.length; i++) {
+      if (i > 0) await sleep(400)
+      await ctx.reply(formatForTelegram(parts[i]), { parse_mode: 'HTML' }).catch(() => {})
     }
 
     if (result.sessionId) {

@@ -12,6 +12,7 @@ import { startDispatcher, stopDispatcher } from './dispatcher.js'
 import { startKanbanWorker, stopKanbanWorker } from './kanban-worker.js'
 import { startProgressReporter, stopProgressReporter } from './progress-reporter.js'
 import { startHeartbeat, stopHeartbeat } from './heartbeat.js'
+import { sendTelegramMessage } from './telegram.js'
 import { logger } from './logger.js'
 
 const PID_FILE = join(STORE_DIR, 'opencode.pid')
@@ -95,15 +96,7 @@ async function main(): Promise<void> {
   startDashboard()
 
   initScheduler(async (chatId: string, text: string) => {
-    try {
-      await (await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' })
-      })).json()
-    } catch (err) {
-      logger.error({ err, chatId }, 'Failed to send scheduler notification')
-    }
+    await sendTelegramMessage(chatId, text, 'HTML')
   })
 
   try {
