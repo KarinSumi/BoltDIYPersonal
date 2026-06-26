@@ -223,14 +223,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-async function retryOnRateLimit<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
+async function retryOnRateLimit<T>(fn: () => Promise<T>, maxRetries = 5): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
       return await fn()
     } catch (err) {
       const { category, recovery } = classifyError(err as Error)
       if ((category === 'rate_limit' || category === 'overloaded') && attempt < maxRetries) {
-        const wait = recovery.retryAfterMs * Math.pow(2, attempt) + Math.random() * 1000
+        const wait = recovery.retryAfterMs * Math.pow(2, attempt) + Math.random() * 5000
         logger.warn({ category, attempt: attempt + 1, waitMs: Math.round(wait) }, 'LLM rate limited, retrying')
         await sleep(wait)
         continue

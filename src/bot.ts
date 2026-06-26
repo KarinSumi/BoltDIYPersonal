@@ -8,6 +8,7 @@ import { voiceEnabledChats, chatEvents, abortControllers } from './state.js'
 import { listAgents, listKanbanBoards, listKanbanTasks, getKanbanBoard, getKanbanTask, isDelegationRequest, getAgent, createKanbanBoard, createKanbanTask, setKanbanTaskStatus } from './orchestrator.js'
 import { classifyComplexity, runOrchestrator, respondDirect } from './master-orchestrator.js'
 import { isLocked, lock, unlock, checkKillPhrase, resetIdleTimer } from './security.js'
+import { classifyError } from './errors.js'
 import { touchActivity } from './state.js'
 import { insertScheduledTask, insertMission, listScheduledTasks, listMissions } from './db.js'
 import { syncAllBoardsToFiles } from './obsidian-sync.js'
@@ -640,9 +641,12 @@ async function handleUserMessage(ctx: Context, chatId: string, text: string): Pr
     abortControllers.delete(chatId)
     const msg = (err as Error).message
     const isTimeout = abortController.signal.aborted && msg.includes('abort')
+    const { category } = classifyError(err as Error)
     const userMsg = isTimeout
       ? 'The request timed out. Try breaking it into smaller steps.'
-      : `Error: ${msg}`
+      : category === 'rate_limit' || category === 'overloaded'
+        ? "I'm a bit busy right now. Please try again in a moment."
+        : `Error: ${msg}`
     logger.error({ chatId, err: msg }, 'Message handling failed')
     chatEvents.emit('error', { chatId, agentId: 'main', data: msg, timestamp: Date.now() })
     await ctx.reply(userMsg).catch(() => {})

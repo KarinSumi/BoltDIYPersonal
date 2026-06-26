@@ -55,7 +55,12 @@ export function pushActivityEntry(event: string, summary: string, timestamp?: nu
 }
 
 export function emitEvent(event: string, data: unknown): void {
-  bus.emit(event, data)
+  try {
+    bus.emit(event, data)
+  } catch {
+    // bus.emit('error') can throw ERR_UNHANDLED_ERROR in some Node versions
+    // even with a listener attached — swallow safely here
+  }
   for (const cb of sseClients) {
     try { cb(event, data) } catch { /* ignore */ }
   }
