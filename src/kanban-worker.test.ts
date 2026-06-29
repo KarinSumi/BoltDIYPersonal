@@ -11,9 +11,10 @@ import {
 import { startKanbanWorker, stopKanbanWorker } from './kanban-worker.js'
 import { chatEvents } from './state.js'
 
-vi.mock('./opencode-agent.js', () => {
+vi.mock('./opencode-agent.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./opencode-agent.js')>()
   const mockFn = vi.fn()
-  return { queryAgent: mockFn }
+  return { ...actual, queryAgent: mockFn }
 })
 
 import { queryAgent } from './opencode-agent.js'

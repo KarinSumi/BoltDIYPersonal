@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plugin Hub — OpenCode OS</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: system-ui, -apple-system, sans-serif; background: #0d1117; color: #e0e0e0; padding: 2rem; }
+h1 { margin-bottom: 1.5rem; color: #58a6ff; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; }
+.card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.2rem; }
+.card h3 { color: #c9d1d9; margin-bottom: 0.5rem; }
+.card p { color: #8b949e; font-size: 0.9rem; margin-bottom: 0.8rem; }
+.card .meta { font-size: 0.8rem; color: #6e7681; }
+.install-form { display: flex; gap: 0.5rem; margin-bottom: 2rem; }
+.install-form input { flex: 1; padding: 0.6rem; border: 1px solid #30363d; border-radius: 6px; background: #0d1117; color: #e0e0e0; }
+.install-form button { padding: 0.6rem 1.2rem; background: #238636; color: white; border: none; border-radius: 6px; cursor: pointer; }
+.install-form button:hover { background: #2ea043; }
+.installed-badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 12px; background: #1f6feb; font-size: 0.7rem; color: white; }
+.badge { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.7rem; color: white; }
+.badge.builtin { background: #6e7681; }
+.badge.custom { background: #238636; }
+</style>
+</head>
+<body>
+<h1>Plugin Hub</h1>
+
+<div class="install-form">
+  <input type="text" id="repoUrl" placeholder="https://github.com/user/repo" />
+  <button onclick="installPlugin()">Install from GitHub</button>
+</div>
+
+<div id="plugins" class="grid"></div>
+
+<script>
+async function loadPlugins() {
+  try {
+    const res = await fetch('/api/plugins')
+    const plugins = await res.json()
+    const grid = document.getElementById('plugins')
+    grid.innerHTML = plugins.map(p => `
+      <div class="card">
+        <h3>${p.name}</h3>
+        <p>${p.description || 'No description'}</p>
+        <div class="meta">
+          <span class="badge ${p.builtin ? 'builtin' : 'custom'}">${p.builtin ? 'builtin' : 'custom'}</span>
+          v${p.version || '0.0.1'}
+          ${p.panels?.length ? `<span class="installed-badge">${p.panels.length} panels</span>` : ''}
+          ${p.commands?.length ? `<span class="installed-badge">${p.commands.length} commands</span>` : ''}
+        </div>
+      </div>
+    `).join('')
+  } catch (err) {
+    document.getElementById('plugins').innerHTML = '<p style="color:#f85149">Failed to load plugins</p>'
+  }
+}
+
+async function installPlugin() {
+  const url = document.getElementById('repoUrl').value.trim()
+  if (!url) return
+  const btn = document.querySelector('.install-form button')
+  btn.disabled = true
+  btn.textContent = 'Installing...'
+  try {
+    const res = await fetch('/api/plugins/install', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    })
+    if (res.ok) {
+      document.getElementById('repoUrl').value = ''
+      await loadPlugins()
+    } else {
+      const err = await res.text()
+      alert('Install failed: ' + err)
+    }
+  } catch (err) {
+    alert('Install error: ' + err.message)
+  }
+  btn.disabled = false
+  btn.textContent = 'Install from GitHub'
+}
+
+loadPlugins()
+</script>
+</body>
+</html>

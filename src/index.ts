@@ -12,12 +12,13 @@ import { startDispatcher, stopDispatcher } from './dispatcher.js'
 import { startKanbanWorker, stopKanbanWorker } from './kanban-worker.js'
 import { startProgressReporter, stopProgressReporter } from './progress-reporter.js'
 import { startHeartbeat, stopHeartbeat } from './heartbeat.js'
-import { sendTelegramMessage } from './telegram.js'
+import { sendTelegramMessage, getAllowedChatIds } from './telegram.js'
+import { startOpenCodeServer, stopOpenCodeServer } from './opencode-server.js'
 import { logger } from './logger.js'
 
 const PID_FILE = join(STORE_DIR, 'opencode.pid')
 
-function acquireLock(): void {
+async function acquireLock(): Promise<void> {
   if (!existsSync(STORE_DIR)) mkdirSync(STORE_DIR, { recursive: true })
 
   if (existsSync(PID_FILE)) {
@@ -25,8 +26,8 @@ function acquireLock(): void {
       const oldPid = parseInt(readFileSync(PID_FILE, 'utf-8').trim())
       process.kill(oldPid, 0)
       process.kill(oldPid, 'SIGTERM')
-      logger.info({ oldPid }, 'Killed stale process')
-      setTimeout(() => {}, 1000)
+      logger.info({ oldPid }, 'Killed stale process, waiting for it to exit...')
+      await new Promise(resolve => setTimeout(resolve, 2000))
     } catch { /* stale pid */ }
   }
 
@@ -34,7 +35,11 @@ function acquireLock(): void {
 }
 
 function releaseLock(): void {
-  try { unlinkSync(PID_FILE) } catch { /* ignore */ }
+  try {
+    if (existsSync(PID_FILE)) {
+      unlinkSync(PID_FILE)
+    }
+  } catch { /* ignore */ }
 }
 
 process.on('uncaughtException', (err) => {
@@ -58,13 +63,12 @@ function printBanner(): void {
 }
 
 async function main(): Promise<void> {
+  if (process.env.DEBUG) console.log('entering main')
   printBanner()
+  if (process.env.DEBUG) console.log('passed printBanner')
 
   if (!TELEGRAM_BOT_TOKEN) {
-    logger.error('TELEGRAM_BOT_TOKEN is not set. Create a .env file with your bot token.')
-    console.error('\n✗ TELEGRAM_BOT_TOKEN is required.')
-    console.error('  Create a .env file with: TELEGRAM_BOT_TOKEN=your_token_here')
-    console.error('  Get a token from @BotFather on Telegram.')
+    console.error('No bot token')
     process.exit(1)
   }
 
@@ -72,25 +76,46 @@ async function main(): Promise<void> {
     logger.warn('ALLOWED_CHAT_ID not set. First run mode — any chat ID can access the bot.')
     console.warn('\n⚠ ALLOWED_CHAT_ID not set. Send /chatid to the bot after startup to get your ID.')
   }
-
-  acquireLock()
+  
+  if (process.env.DEBUG) console.log('acquiring lock')
+  await acquireLock()
+  if (process.env.DEBUG) console.log('lock acquired')
 
   if (!existsSync(STORE_DIR)) mkdirSync(STORE_DIR, { recursive: true })
   if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true })
 
+  if (process.env.DEBUG) console.log('initDatabase')
   initDatabase()
+  if (process.env.DEBUG) console.log('registerMainAgent')
   registerMainAgent()
+  if (process.env.DEBUG) console.log('resetIdleTimer')
   resetIdleTimer()
+  if (process.env.DEBUG) console.log('setShutdownHandler')
   setShutdownHandler(gracefulShutdown)
 
   runSalienceDecay()
   setInterval(() => runSalienceDecay(), 86400000)
 
+  if (process.env.DEBUG) console.log('start core systems')
   startDispatcher()
   startKanbanWorker()
   startProgressReporter()
   startHeartbeat()
 
+  // Start OpenCode server for deep coding tasks (non-blocking)
+  if (process.env.DEBUG) console.log('starting OpenCode server')
+  startOpenCodeServer().then((ready) => {
+    if (ready) {
+      logger.info('OpenCode server available for deep tasks')
+      if (process.env.DEBUG) console.log('  ✓ OpenCode server ready (deep tasks enabled)')
+    } else {
+      logger.info('OpenCode unavailable — deep tasks will use NIM LLM')
+    }
+  }).catch((err) => {
+    logger.warn({ err: (err as Error).message }, 'OpenCode server startup error (non-fatal)')
+  })
+
+  if (process.env.DEBUG) console.log('createBot')
   const bot = createBot()
 
   startDashboard()
@@ -102,8 +127,19 @@ async function main(): Promise<void> {
   try {
     bot.start()
     logger.info('OpenCode OS is running')
-    console.log('\n✓ OpenCode OS is running!')
-    console.log('  Send a message to your Telegram bot to begin.\n')
+    if (process.env.DEBUG) console.log('\n✓ OpenCode OS is running!')
+    if (process.env.DEBUG) console.log('  Send a message to your Telegram bot to begin.\n')
+
+    const chatIds = getAllowedChatIds()
+    for (const chatId of chatIds) {
+      sendTelegramMessage(chatId, '✅ Terminate previous server, and Restart server done').catch(e => {
+        logger.warn({ err: e.message }, 'Failed to send startup message')
+      })
+    }
+
+    if (process.send) {
+      process.send('ready')
+    }
 
     process.on('SIGINT', () => { gracefulShutdown(); process.exit(0) })
     process.on('SIGTERM', () => { gracefulShutdown(); process.exit(0) })
@@ -121,12 +157,14 @@ function gracefulShutdown(): void {
   stopKanbanWorker()
   stopProgressReporter()
   stopHeartbeat()
+  stopOpenCodeServer()
   releaseLock()
   try { getDb().close() } catch { /* ok */ }
   logger.info('Graceful shutdown complete')
 }
 
 main().catch((err) => {
+  console.error('FATAL ERROR:', err)
   logger.error({ err }, 'Fatal error')
   releaseLock()
   process.exit(1)

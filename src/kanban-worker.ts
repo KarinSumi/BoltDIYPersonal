@@ -1,11 +1,15 @@
 import { queryAgent } from './opencode-agent.js'
-import { getTasksByStatus, completeTask, failTask, setAgentIdle, resetAgentFailures, incrementAgentFailures } from './kanban-db.js'
+import { classifyError } from './errors.js'
+import { promptOpenCode } from './opencode-runner.js'
+import { isOpenCodeServerReady } from './opencode-server.js'
+import { getTasksByStatus, completeTask, failTask, setAgentIdle, resetAgentFailures, incrementAgentFailures, Task } from './kanban-db.js'
 import { logger } from './logger.js'
 import { chatEvents } from './state.js'
 
 const POLL_INTERVAL = 3_000
 const MAX_RETRIES = 1
 const MAX_CONCURRENCY = 3
+const RETRY_BACKOFF_MS: number[] = [1_000, 10_000]
 const inFlight = new Set<string>()
 
 let running = false
@@ -62,21 +66,38 @@ async function processRunningTasks(): Promise<void> {
   }
 }
 
-async function executeTask(task: { id: string; assignee: string | null; prompt: string; title: string; board_id: string }): Promise<void> {
+async function executeTask(task: Task): Promise<void> {
   const agentId = task.assignee || 'unknown'
-  logger.info({ taskId: task.id, agentId, title: task.title }, 'Executing kanban task')
+  const taskType = task.task_type ?? 'nim'
+  logger.info({ taskId: task.id, agentId, title: task.title, taskType }, 'Executing kanban task')
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const systemPrompt = `You are a specialist agent "${agentId}". Execute the following task and return ONLY the result. Be thorough and complete.`
+      let output: string
 
-      const result = await queryAgent({
-        messages: [{ role: 'user', content: task.prompt }],
-        systemPrompt,
-        maxTurns: 10,
-      })
+      if (taskType === 'opencode' && isOpenCodeServerReady()) {
+        // Deep task: OpenCode server
+        logger.info({ taskId: task.id }, 'Routing to OpenCode server')
+        const result = await promptOpenCode({
+          chatId: task.board_id,
+          prompt: task.prompt,
+          sessionTitle: task.title,
+        })
+        output = result.text
+      } else {
+        // Fast task: NIM LLM (or fallback when OpenCode unavailable)
+        if (taskType === 'opencode') {
+          logger.warn({ taskId: task.id }, 'OpenCode not ready, falling back to NIM LLM')
+        }
+        const systemPrompt = `You are a specialist agent "${agentId}". Execute the following task and return ONLY the result. Be thorough and complete.`
+        const result = await queryAgent({
+          messages: [{ role: 'user', content: task.prompt }],
+          systemPrompt,
+          maxTurns: 10,
+        })
+        output = result.text || 'No output generated.'
+      }
 
-      const output = result.text || 'No output generated.'
       completeTask(task.id, output)
       setAgentIdle(agentId)
       resetAgentFailures(agentId)
@@ -95,7 +116,10 @@ async function executeTask(task: { id: string; assignee: string | null; prompt: 
       logger.error({ taskId: task.id, agentId, attempt: attempt + 1, err: msg }, 'Kanban task attempt failed')
 
       if (attempt < MAX_RETRIES) {
-        logger.info({ taskId: task.id }, 'Retrying kanban task')
+        const { category } = classifyError(err as Error)
+        const delay = RETRY_BACKOFF_MS[attempt] || 30_000
+        logger.info({ taskId: task.id, attempt: attempt + 1, delayMs: delay, category }, 'Retrying kanban task')
+        await new Promise(r => setTimeout(r, delay))
         continue
       }
     }

@@ -99,9 +99,14 @@ function runMigrations(): void {
       status TEXT NOT NULL DEFAULT 'active',
       last_run TEXT,
       last_result TEXT,
+      consecutive_failures INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL
     )`)
     db.exec(`CREATE INDEX idx_scheduled_tasks_status_next ON scheduled_tasks(status, next_run)`)
+  } else {
+    if (!hasColumn('scheduled_tasks', 'consecutive_failures')) {
+      db.exec('ALTER TABLE scheduled_tasks ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0')
+    }
   }
 
   if (!tables.has('mission_tasks')) {
@@ -185,6 +190,7 @@ function runMigrations(): void {
       assignee TEXT,
       status TEXT DEFAULT 'triage',
       priority INTEGER DEFAULT 3,
+      task_type TEXT DEFAULT 'nim',
       depends_on TEXT,
       retry_count INTEGER DEFAULT 0,
       max_retries INTEGER DEFAULT 2,
@@ -196,6 +202,13 @@ function runMigrations(): void {
       created_at TEXT,
       updated_at TEXT
     )`)
+  } else {
+    // Idempotent migration: add task_type column if it doesn't exist yet
+    try {
+      db.exec(`ALTER TABLE kanban_tasks ADD COLUMN task_type TEXT DEFAULT 'nim'`)
+    } catch {
+      // Column already exists — ignore
+    }
   }
 
   if (!tables.has('agent_sessions')) {
@@ -297,6 +310,19 @@ export function listScheduledTasks(agentId?: string): unknown[] {
 
 export function resetStuckTasks(): void {
   db.exec("UPDATE scheduled_tasks SET status = 'active' WHERE status = 'running'")
+}
+
+export function incrementTaskFailures(id: string): void {
+  db.prepare('UPDATE scheduled_tasks SET consecutive_failures = consecutive_failures + 1 WHERE id = ?').run(id)
+}
+
+export function resetTaskFailures(id: string): void {
+  db.prepare('UPDATE scheduled_tasks SET consecutive_failures = 0 WHERE id = ?').run(id)
+}
+
+export function getTaskFailures(id: string): number {
+  const row = db.prepare('SELECT consecutive_failures FROM scheduled_tasks WHERE id = ?').get(id) as { consecutive_failures: number } | undefined
+  return row?.consecutive_failures ?? 0
 }
 
 // Mission Tasks

@@ -4,7 +4,7 @@ import { join } from 'path'
 const env = readEnvFile()
 
 export const PROJECT_ROOT = ROOT
-export const STORE_DIR = join(PROJECT_ROOT, 'store')
+export const STORE_DIR = process.env['STORE_DIR'] || join(PROJECT_ROOT, 'store')
 export const UPLOADS_DIR = join(PROJECT_ROOT, 'workspace', 'uploads')
 export const MEET_BRIEFS_DIR = join(PROJECT_ROOT, 'outputs', 'meet_briefs')
 
@@ -12,7 +12,7 @@ export const TELEGRAM_BOT_TOKEN = env['TELEGRAM_BOT_TOKEN'] ?? ''
 export const ALLOWED_CHAT_ID = env['ALLOWED_CHAT_ID'] ?? ''
 export const OPENCODE_API_KEY = env['OPENCODE_API_KEY'] ?? ''
 export const OPENCODE_API_BASE_URL = env['OPENCODE_API_BASE_URL'] ?? ''
-export const OPENCODE_MODEL = env['OPENCODE_MODEL'] ?? 'deepseek-v4-flash-free'
+export const OPENCODE_MODEL = env['OPENCODE_MODEL'] ?? 'deepseek-ai/deepseek-v4-flash'
 
 export const GROQ_API_KEY = env['GROQ_API_KEY'] ?? ''
 export const ELEVENLABS_API_KEY = env['ELEVENLABS_API_KEY'] ?? ''
@@ -36,3 +36,11 @@ export const DASHBOARD_PORT = Number(env['DASHBOARD_PORT']) || 3141
 export const LOG_LEVEL = env['LOG_LEVEL'] ?? 'info'
 
 export const OBSIDIAN_VAULT_PATH = env['OBSIDIAN_VAULT_PATH'] ?? ''
+
+// Two-tier task routing
+export const TASK_TIMEOUT_NIM_MS = Number(env['TASK_TIMEOUT_NIM_MS']) || 60000
+export const TASK_TIMEOUT_OPENCODE_MS = Number(env['TASK_TIMEOUT_OPENCODE_MS']) || 900000
+
+// OpenCode server
+export const OPENCODE_SERVER_PORT = Number(env['OPENCODE_SERVER_PORT']) || 4096
+export const OPENCODE_SERVER_ENABLED = (env['OPENCODE_SERVER_ENABLED'] ?? 'true') === 'true'

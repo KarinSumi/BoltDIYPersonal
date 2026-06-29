@@ -1,0 +1,51 @@
+[gd_scene load_steps=10 format=3 uid="uid://c4hxq3kip5yvv"]
+
+[ext_resource type="Script" path="res://scripts/event_client.gd" id="1_6f7a1"]
+[ext_resource type="Script" path="res://scripts/world_builder.gd" id="2_7b3c2"]
+[ext_resource type="Script" path="res://scripts/agent_manager.gd" id="3_8d4e3"]
+[ext_resource type="Script" path="res://scripts/day_night.gd" id="4_9e5f4"]
+[ext_resource type="Script" path="res://scripts/hud.gd" id="5_0a6b5"]
+[ext_resource type="Script" path="res://scripts/ghost_deck.gd" id="6_1b7c6"]
+[ext_resource type="Environment" path="res://assets/default_env.tres" id="7_2c8d7"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_8e9f8"]
+sky_top_color = Color(0.3, 0.5, 1.0, 1.0)
+sky_horizon_color = Color(0.7, 0.7, 0.8, 1.0)
+sky_ground_color = Color(0.2, 0.2, 0.2, 1.0)
+sun_angle_max = 90.0
+sun_latitute = 45.0
+sun_longitude = 0.0
+
+[sub_resource type="Sky" id="Sky_9f0a9"]
+sky_material = SubResource("ProceduralSkyMaterial_8e9f8")
+
+[node name="World" type="Node3D"]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = ExtResource("7_2c8d7")
+
+[node name="DirectionalLight" type="DirectionalLight3D" parent="."]
+directional_shadow_enabled = true
+directional_shadow_max_distance = 100.0
+
+[node name="EventClient" type="Node" parent="."]
+script = ExtResource("1_6f7a1")
+
+[node name="WorldBuilder" type="Node" parent="."]
+script = ExtResource("2_7b3c2")
+
+[node name="AgentManager" type="Node" parent="."]
+script = ExtResource("3_8d4e3")
+
+[node name="DayNightCycle" type="Node" parent="."]
+script = ExtResource("4_9e5f4")
+
+[node name="HUD" type="Node" parent="."]
+script = ExtResource("5_0a6b5")
+
+[node name="GhostDeck" type="Node" parent="."]
+script = ExtResource("6_1b7c6")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.707, -0.707, 0, 0.707, 0.707, 0, 15, 0)
+current = true

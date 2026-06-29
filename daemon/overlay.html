@@ -13,12 +13,424 @@ body {
   overflow: hidden;
   height: 100vh;
 }
+#app {
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+h1 { font-size: 1.2rem; color: #58a6ff; }
+.status-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #3fb950;
+  margin-right: 0.5rem;
+}
+#chat-panel {
+  flex: 1;
+  overflow-y: auto;
+  background: rgba(22, 27, 34, 0.85);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 0.5rem;
+}
+#chat-panel .msg {
+  margin-bottom: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+#chat-panel .msg.user { background: rgba(47, 129, 247, 0.2); }
+#chat-panel .msg.agent { background: rgba(35, 134, 54, 0.15); }
+#chat-panel .msg.system { background: transparent; color: #8b949e; font-style: italic; }
+#input-area {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+#input-area input {
+  flex: 1;
+  padding: 0.6rem;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  background: #0d1117;
+  color: #e0e0e0;
+  font-size: 0.9rem;
+}
+#input-area input:focus { outline: none; border-color: #58a6ff; }
+#input-area button {
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+#send-btn { background: #238636; color: white; }
+#send-btn:hover { background: #2ea043; }
+#ptt-btn {
+  width: 36px; height: 36px;
+  padding: 0;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.06);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: #c9d1d9;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+#ptt-btn:hover { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.25); }
+#ptt-btn:active { background: rgba(88,166,255,0.3); }
+#ptt-btn.recording {
+  background: rgba(218,54,51,0.25);
+  border-color: #da3633;
+  box-shadow: 0 0 12px rgba(218,54,51,0.4);
+  animation: ptt-pulse 1s ease-in-out infinite;
+}
+@keyframes ptt-pulse { 0%, 100% { box-shadow: 0 0 12px rgba(218,54,51,0.4); } 50% { box-shadow: 0 0 20px rgba(218,54,51,0.7); } }
+#recording-indicator {
+  display: none;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  color: #da3633;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+#recording-indicator.active { display: flex; }
+#recording-indicator .dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: #da3633;
+  animation: blink 0.8s step-end infinite;
+}
+@keyframes blink { 50% { opacity: 0.3; } }
+#recording-indicator .time { font-variant-numeric: tabular-nums; }
+.toast-container {
+  position: fixed;
+  bottom: 5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  pointer-events: none;
+}
+.toast {
+  background: rgba(22,27,34,0.92);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 0.5rem 1rem;
+  font-size: 0.8rem;
+  color: #c9d1d9;
+  animation: toast-in 0.25s ease-out;
+  pointer-events: auto;
+  max-width: 80vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.toast.error { border-color: #da3633; color: #f85149; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+#agent-rail {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  overflow-x: auto;
+}
+.agent-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.5rem;
+  background: rgba(22, 27, 34, 0.7);
+  border-radius: 12px;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+.agent-chip .dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+}
+.agent-chip .dot.online { background: #3fb950; }
+.agent-chip .dot.busy { background: #d29922; }
+.agent-chip .dot.offline { background: #6e7681; }
 </style>
 </head>
 <body>
-  <div id="app">
-    <h1>OpenCode OS</h1>
-    <p>Daemon running</p>
+<div id="app">
+  <header>
+    <div>
+      <span class="status-dot"></span>
+      <strong>OpenCode OS</strong>
+    </div>
+    <div style="font-size:0.8rem;color:#8b949e">
+      <span id="status-text">Connected</span>
+    </div>
+  </header>
+
+  <div id="agent-rail"></div>
+
+  <div id="chat-panel"></div>
+
+  <div id="input-area">
+    <input type="text" id="msg-input" placeholder="Message..." />
+    <button id="send-btn">Send</button>
+    <div id="recording-indicator"><span class="dot"></span><span class="time">0:00</span></div>
+    <button id="ptt-btn" title="Push to Talk (hold)">🎤</button>
   </div>
+  <div class="toast-container" id="toast-container"></div>
+</div>
+
+<script>
+const RECORDING_CANCEL_MS = 300
+const WS_TOKEN = localStorage.getItem('overlay_token')
+const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+
+let ws = null
+let reconnectTimer = null
+function connectWS() {
+  const wsUrl = WS_TOKEN
+    ? `${wsProtocol}//${location.host}/ws?token=${WS_TOKEN}`
+    : `${wsProtocol}//${location.host}/ws`
+  ws = new WebSocket(wsUrl)
+const chatPanel = document.getElementById('chat-panel')
+const agentRail = document.getElementById('agent-rail')
+const msgInput = document.getElementById('msg-input')
+const sendBtn = document.getElementById('send-btn')
+const pttBtn = document.getElementById('ptt-btn')
+const statusText = document.getElementById('status-text')
+const recIndicator = document.getElementById('recording-indicator')
+const recTime = recIndicator.querySelector('.time')
+const toastContainer = document.getElementById('toast-container')
+
+let mediaRecorder = null
+let audioChunks = []
+let isRecording = false
+let recordingStartTime = 0
+let recordingTimer = null
+let audioStream = null
+
+  ws.onopen = () => {
+    statusText.textContent = 'Connected'
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+  }
+  ws.onclose = (e) => {
+    statusText.textContent = 'Disconnected'
+    if (e.code === 4001) showToast('Auth failed — set overlay_token in localStorage', true)
+    cleanupRecording()
+    reconnectTimer = setTimeout(connectWS, 3000)
+  }
+  ws.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data)
+      handleEvent(msg)
+    } catch {}
+  }
+}
+connectWS()
+
+function handleEvent(msg) {
+  switch (msg.type) {
+    case 'connected':
+      break
+    case 'chat_reply':
+      addMessage(msg.data.text, 'agent')
+      break
+    case 'agent_status_change':
+      updateAgentChip(msg.data)
+      break
+    case 'agent_speech':
+      playAgentSpeech(msg.data)
+      break
+    case 'audio_transcribed':
+      onAudioTranscribed(msg.data)
+      break
+    case 'agent_update':
+      updateAgentRail(msg.data)
+      break
+  }
+}
+
+function addMessage(text, cls) {
+  const el = document.createElement('div')
+  el.className = `msg ${cls}`
+  el.textContent = text
+  chatPanel.appendChild(el)
+  chatPanel.scrollTop = chatPanel.scrollHeight
+}
+
+function showToast(text, isError) {
+  const el = document.createElement('div')
+  el.className = 'toast' + (isError ? ' error' : '')
+  el.textContent = text
+  toastContainer.appendChild(el)
+  setTimeout(() => { if (el.parentNode) el.remove() }, 3000)
+}
+
+function onAudioTranscribed(data) {
+  const text = (data.text || '').trim()
+  if (text && text !== '[audio transcribed]') {
+    msgInput.value = text
+    showToast(`Transcribed: ${text}`)
+  } else {
+    showToast('Could not transcribe audio', true)
+  }
+}
+
+function updateAgentRail(agents) {
+  agentRail.innerHTML = ''
+  if (Array.isArray(agents)) {
+    agents.forEach(a => addAgentChip(a))
+  }
+}
+
+function updateAgentChip(data) {
+  const chip = agentRail.querySelector(`[data-id="${data.agentId}"]`)
+  if (chip) {
+    const dot = chip.querySelector('.dot')
+    dot.className = `dot ${(data.status || 'online').toLowerCase()}`
+  }
+}
+
+function addAgentChip(agent) {
+  const chip = document.createElement('div')
+  chip.className = 'agent-chip'
+  chip.dataset.id = agent.id
+  const status = (agent.status || 'online').toLowerCase()
+  chip.innerHTML = `<span class="dot ${status}"></span>${agent.name || agent.id}`
+  agentRail.appendChild(chip)
+}
+
+sendBtn.onclick = () => {
+  const text = msgInput.value.trim()
+  if (!text) return
+  ws.send(JSON.stringify({ type: 'chat', text }))
+  addMessage(text, 'user')
+  msgInput.value = ''
+}
+
+msgInput.onkeydown = (e) => {
+  if (e.key === 'Enter') sendBtn.click()
+}
+
+pttBtn.onmousedown = () => startRecording()
+pttBtn.onmouseup = () => stopRecording()
+pttBtn.onmouseleave = () => { if (isRecording) stopRecording() }
+
+function updateRecTime() {
+  const elapsed = Date.now() - recordingStartTime
+  const secs = Math.floor(elapsed / 1000)
+  recTime.textContent = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`
+}
+
+function cleanupRecording() {
+  if (recordingTimer) { clearInterval(recordingTimer); recordingTimer = null }
+  if (audioStream) { audioStream.getTracks().forEach(t => t.stop()); audioStream = null }
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    try { mediaRecorder.stop() } catch {}
+  }
+  mediaRecorder = null
+  audioChunks = []
+  isRecording = false
+  recordingStartTime = 0
+  pttBtn.classList.remove('recording')
+  pttBtn.textContent = '🎤'
+  recIndicator.classList.remove('active')
+}
+
+async function startRecording() {
+  if (isRecording) return
+  try {
+    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : 'audio/webm'
+    mediaRecorder = new MediaRecorder(audioStream, { mimeType: mime })
+    audioChunks = []
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunks.push(e.data)
+    }
+    mediaRecorder.onstop = async () => {
+      if (audioChunks.length === 0) return
+      const blob = new Blob(audioChunks, { type: mime })
+      if (audioStream) { audioStream.getTracks().forEach(t => t.stop()); audioStream = null }
+      try {
+        const buffer = await blob.arrayBuffer()
+        ws.send(JSON.stringify({
+          type: 'audio_chunk',
+          data: Array.from(new Uint8Array(buffer)),
+        }))
+      } catch {}
+    }
+    mediaRecorder.start()
+    isRecording = true
+    recordingStartTime = Date.now()
+    pttBtn.classList.add('recording')
+    pttBtn.textContent = '🔴'
+    recIndicator.classList.add('active')
+    updateRecTime()
+    recordingTimer = setInterval(updateRecTime, 200)
+  } catch (err) {
+    showToast('Microphone access denied or unavailable', true)
+    cleanupRecording()
+  }
+}
+
+function stopRecording() {
+  if (!isRecording || !mediaRecorder) return
+  const elapsed = Date.now() - recordingStartTime
+  if (recordingTimer) { clearInterval(recordingTimer); recordingTimer = null }
+  recIndicator.classList.remove('active')
+  if (elapsed < RECORDING_CANCEL_MS) {
+    cleanupRecording()
+    return
+  }
+  mediaRecorder.stop()
+  isRecording = false
+  pttBtn.classList.remove('recording')
+  pttBtn.textContent = '🎤'
+}
+
+let sharedAudioCtx = null
+function getAudioContext() {
+  if (!sharedAudioCtx) sharedAudioCtx = new AudioContext()
+  return sharedAudioCtx
+}
+
+function playAgentSpeech(data) {
+  if (data.audioBase64) {
+    try {
+      const binary = atob(data.audioBase64)
+      const bytes = new Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+      const audio = getAudioContext()
+      audio.decodeAudioData(bytes.buffer, (buffer) => {
+        const source = audio.createBufferSource()
+        source.buffer = buffer
+        source.connect(audio.destination)
+        source.start()
+      })
+    } catch {}
+  }
+  addMessage(`[${data.agentId} speaks]: ${data.text}`, 'agent')
+}
+
+fetch('/api/health').then(r => r.json()).then(data => {
+  if (data.status === 'ok') statusText.textContent = 'Daemon OK'
+}).catch(() => statusText.textContent = 'Daemon unavailable')
+</script>
 </body>
 </html>

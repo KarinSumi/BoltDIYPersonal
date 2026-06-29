@@ -88,6 +88,11 @@ export function createBot(): Bot {
 
   const bot = new Bot(TELEGRAM_BOT_TOKEN)
 
+  // Prevent uncaught error events from crashing the process
+  chatEvents.on('error', (event: { chatId?: string; message?: string; data?: string }) => {
+    logger.warn({ chatId: event.chatId, err: event.message ?? event.data }, 'Chat event error (suppressed)')
+  })
+
   function isAuthorisedChat(ctx: Context): boolean {
     const chatId = String(ctx.chat?.id ?? '')
     return isAuthorised(chatId)
@@ -573,20 +578,25 @@ async function handleUserMessage(ctx: Context, chatId: string, text: string): Pr
   chatEvents.emit('user_message', { chatId, agentId: 'main', data: text, timestamp: Date.now() })
 
   // ── Typing indicator ──
-  let typingFailures = 0
-  const typingInterval = setInterval(() => {
-    ctx.api.sendChatAction(chatId, 'typing').catch(() => {
-      typingFailures++
-      if (typingFailures >= 2) clearInterval(typingInterval)
-    })
-  }, TYPING_REFRESH_MS)
+  let isTypingActive = true
+  const sendTyping = async () => {
+    while (isTypingActive) {
+      try {
+        await ctx.api.sendChatAction(chatId, 'typing')
+      } catch (err) {
+        logger.debug({ err: (err as Error).message }, 'Typing action failed')
+      }
+      if (isTypingActive) await sleep(TYPING_REFRESH_MS)
+    }
+  }
+  sendTyping()
 
   // ── Check @agent delegation ──
   const delegation = isDelegationRequest(text)
   if (delegation) {
     const agent = getAgent(delegation.agentId)
     if (agent) {
-      clearInterval(typingInterval)
+      isTypingActive = false
       const boardId = createKanbanBoardForAgent(chatId, delegation.agentId, delegation.prompt)
       await ctx.reply(
         `Delegating to **${agent.name}**: "${delegation.prompt.slice(0, 100)}${delegation.prompt.length > 100 ? '...' : ''}"\n\n` +
@@ -614,7 +624,7 @@ async function handleUserMessage(ctx: Context, chatId: string, text: string): Pr
     }
 
     clearTimeout(timeoutId)
-    clearInterval(typingInterval)
+    isTypingActive = false
     abortControllers.delete(chatId)
 
     const responseText = result.text || 'No response generated.'
@@ -626,7 +636,11 @@ async function handleUserMessage(ctx: Context, chatId: string, text: string): Pr
     const parts = splitMessage(responseText)
     for (let i = 0; i < parts.length; i++) {
       if (i > 0) await sleep(400)
-      await ctx.reply(formatForTelegram(parts[i]), { parse_mode: 'HTML' }).catch(() => {})
+      const replyOptions: any = { parse_mode: 'HTML' }
+      if (ctx.message?.message_id) {
+        replyOptions.reply_parameters = { message_id: ctx.message.message_id }
+      }
+      await ctx.reply(formatForTelegram(parts[i]), replyOptions).catch(() => {})
     }
 
     if (result.sessionId) {
@@ -637,18 +651,29 @@ async function handleUserMessage(ctx: Context, chatId: string, text: string): Pr
 
   } catch (err: unknown) {
     clearTimeout(timeoutId)
-    clearInterval(typingInterval)
+    isTypingActive = false
     abortControllers.delete(chatId)
     const msg = (err as Error).message
-    const isTimeout = abortController.signal.aborted && msg.includes('abort')
+    const isAborted = abortController.signal.aborted
     const { category } = classifyError(err as Error)
-    const userMsg = isTimeout
-      ? 'The request timed out. Try breaking it into smaller steps.'
-      : category === 'rate_limit' || category === 'overloaded'
-        ? "I'm a bit busy right now. Please try again in a moment."
-        : `Error: ${msg}`
+
+    let userMsg: string
+    if (isAborted && msg.toLowerCase().includes('abort')) {
+      userMsg = '⏱ Request timed out. Try a simpler question or break it into smaller steps.'
+    } else if (category === 'rate_limit') {
+      userMsg = '⏳ Hit the API rate limit. Will retry automatically — try again in a moment.'
+    } else if (category === 'overloaded') {
+      userMsg = '🔄 Service is busy. Retrying in the background…'
+    } else if (category === 'auth') {
+      userMsg = '🔑 API key issue. Check OPENCODE_API_KEY in your .env file.'
+    } else if (category === 'network') {
+      userMsg = '📡 Network error. Check your internet connection.'
+    } else {
+      userMsg = `⚠️ ${msg.slice(0, 200)}`
+    }
+
     logger.error({ chatId, err: msg }, 'Message handling failed')
-    chatEvents.emit('error', { chatId, agentId: 'main', data: msg, timestamp: Date.now() })
+    chatEvents.emit('error', { chatId, agentId: 'main', data: msg, message: msg, timestamp: Date.now() })
     await ctx.reply(userMsg).catch(() => {})
   }
 }

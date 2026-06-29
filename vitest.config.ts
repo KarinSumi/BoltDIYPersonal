@@ -13,7 +13,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['src/**/*.test.ts', 'daemon/**/*.test.js'],
+    include: ['src/**/*.test.ts', 'daemon/**/*.test.js', 'bridge/**/*.test.js', 'tools/**/*.test.js', 'cli/**/*.test.js'],
     exclude: ['node_modules', 'dist'],
   },
 })

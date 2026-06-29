@@ -7,9 +7,13 @@ import { mkdtempSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
-vi.mock('./opencode-agent.js', () => ({
-  queryAgent: vi.fn().mockResolvedValue({ text: 'Mock result for delegated task' }),
-}))
+vi.mock('./opencode-agent.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./opencode-agent.js')>()
+  return {
+    ...actual,
+    queryAgent: vi.fn().mockResolvedValue({ text: 'Mock result for delegated task' }),
+  }
+})
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))

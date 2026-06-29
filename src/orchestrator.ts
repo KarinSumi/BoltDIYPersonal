@@ -237,8 +237,8 @@ export function archiveKanbanBoard(id: string, summary?: string): void {
   kanbanArchiveBoard(id, summary)
 }
 
-export function createKanbanTask(boardId: string, title: string, prompt: string, assignee?: string, priority?: number, dependsOn?: string): string {
-  return kanbanCreateTask({ board_id: boardId, title, prompt, assignee, priority, depends_on: dependsOn })
+export function createKanbanTask(boardId: string, title: string, prompt: string, assignee?: string, priority?: number, dependsOn?: string, taskType?: 'nim' | 'opencode'): string {
+  return kanbanCreateTask({ board_id: boardId, title, prompt, assignee, priority, depends_on: dependsOn, task_type: taskType })
 }
 
 export function getKanbanTask(id: string): Task | undefined {

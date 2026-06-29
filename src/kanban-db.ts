@@ -15,6 +15,7 @@ export interface Task {
   id: string; board_id: string; parent_task_id: string | null
   title: string; prompt: string; assignee: string | null
   status: string; priority: number
+  task_type: 'nim' | 'opencode'
   depends_on: string | null; retry_count: number; max_retries: number
   progress: number; result: string | null; error: string | null
   started_at: string | null; completed_at: string | null
@@ -86,14 +87,16 @@ export function createTask(opts: {
   board_id: string; title: string; prompt: string
   assignee?: string; priority?: number; status?: string
   depends_on?: string; parent_task_id?: string; max_retries?: number
+  task_type?: 'nim' | 'opencode'
 }): string {
   const id = uuid()
   const db = getDb()
-  db.prepare(`INSERT INTO kanban_tasks (id, board_id, parent_task_id, title, prompt, assignee, status, priority, depends_on, retry_count, max_retries, progress, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, datetime('now'), datetime('now'))`).run(
+  db.prepare(`INSERT INTO kanban_tasks (id, board_id, parent_task_id, title, prompt, assignee, status, priority, task_type, depends_on, retry_count, max_retries, progress, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, datetime('now'), datetime('now'))`).run(
     id, opts.board_id, opts.parent_task_id ?? null,
     opts.title, opts.prompt, opts.assignee ?? null,
     opts.status ?? 'triage', opts.priority ?? 3,
+    opts.task_type ?? 'nim',
     opts.depends_on ?? null, opts.max_retries ?? 2
   )
   return id

@@ -1,0 +1,12 @@
+node_modules/
+.git/
+.env
+.env.*
+store/
+workspace/
+dist/
+*.log
+.gitignore
+README.md
+.vscode/
+.idea/

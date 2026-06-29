@@ -1,4 +1,5 @@
 import { queryAgent } from './opencode-agent.js'
+import { classifyError } from './errors.js'
 import { listPendingTasks, claimPendingTask, finishTask, updateSessionCounts } from './orchestrator.js'
 import { logger } from './logger.js'
 import { chatEvents } from './state.js'
@@ -80,8 +81,10 @@ async function executeTask(task: {
 
     if (!attemptedTasks.has(task.id)) {
       attemptedTasks.add(task.id)
-      logger.info({ taskId: task.id }, 'Retrying delegated task (1 retry)')
-      setImmediate(() => executeTask(task))
+      const { category } = classifyError(err as Error)
+      const delay = category === 'rate_limit' || category === 'overloaded' ? 30_000 : 5_000
+      logger.info({ taskId: task.id, delayMs: delay, category }, 'Retrying delegated task (1 retry)')
+      setTimeout(() => executeTask(task), delay)
       return
     }
 

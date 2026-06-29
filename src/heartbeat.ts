@@ -8,8 +8,10 @@ import { emitHeartbeat } from './events.js'
 const CHECK_INTERVAL = 30_000
 const STALE_THRESHOLD = 120_000
 const MAX_CONSECUTIVE_DOWN = 3
+const IDLE_WARN_THROTTLE_MS = 300_000
 let timer: ReturnType<typeof setInterval> | null = null
 let consecutiveDown = 0
+let lastIdleWarn = 0
 
 export function startHeartbeat(): void {
   if (timer) return
@@ -64,8 +66,12 @@ async function check(): Promise<void> {
 
   const idle = Date.now() - lastActivityAt
   if (idle > STALE_THRESHOLD) {
+    const now = Date.now()
+    if (now - lastIdleWarn > IDLE_WARN_THROTTLE_MS) {
+      lastIdleWarn = now
+      logger.warn({ idleSeconds: Math.round(idle / 1000) }, 'Heartbeat: system idle for extended period')
+    }
     checks.push(`idle:${Math.round(idle / 1000)}s`)
-    logger.warn({ idleSeconds: Math.round(idle / 1000) }, 'Heartbeat: system idle for extended period')
   } else {
     checks.push('active')
   }

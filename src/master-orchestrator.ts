@@ -1,8 +1,10 @@
 import { getClient, getModel } from './llm-client.js'
-import { queryAgent, AgentMessage, AgentResult } from './opencode-agent.js'
+import { queryAgent, AgentMessage, AgentResult, retryOnRateLimit, availableTools, executeToolCall } from './opencode-agent.js'
 import { listAgents, createKanbanBoard, getKanbanBoard, listKanbanBoards, archiveKanbanBoard, createKanbanTask, getKanbanTask, listKanbanTasks, setKanbanTaskStatus, cancelKanbanTask, getBoardProgress } from './orchestrator.js'
+import { getMemoryContext, addGoodMemory, addBadMemory } from './memory.js'
 import { logger } from './logger.js'
 import { AGENT_MAX_TURNS } from './config.js'
+import { handleCeoOrder } from './ceo-chain.js'
 import type OpenAI from 'openai'
 
 // ── Complexity classifier (fast path, no LLM call) ──
@@ -70,30 +72,47 @@ The user does NOT see any other agents. You decide when and how to delegate work
 ## Your Role
 1. **Listen & Clarify** — Understand the user's request fully before acting. Ask questions if requirements are vague.
 2. **Judge Complexity** — Simple requests (greetings, trivial Q&A, single file reads) answer directly. Complex multi-step projects: break into tasks, delegate, track.
-3. **Delegate** — Use the delegation tools to assign sub-tasks to specialist agents. Never mention agent names to the user.
-4. **Track & Report** — Monitor task progress. Give the user a clear status update every 2-3 minutes or when tasks complete.
+3. **Route Tasks Correctly** — Choose task_type carefully for every task.
+4. **Fork When Possible** — Use fork_tasks to create multiple parallel or sequential tasks in one call.
+5. **Track & Report** — Monitor task progress. Give the user a clear status update when tasks complete.
+
+## Task Type Routing Rules (CRITICAL)
+- task_type="opencode" → writing code, editing files, debugging, creating projects, refactoring, building tools, any file modification
+- task_type="nim" → research, web search, answering questions, writing docs, analysis, planning, summarizing, Q&A
+
+## Fork Pattern — Use for Complex Goals
+When a goal needs multiple steps, use fork_tasks to create them all at once:
+1. Research task (nim) — gather context and requirements
+2. Implementation task (opencode) — write/edit actual code, depends on step 1
+3. Documentation task (nim) — write docs/summary, depends on step 2
 
 ## Available Specialist Agents
 ${agentCatalog}
 
 ## Tools Available
+- \`fork_tasks(board_id, tasks[])\` — Create multiple tasks at once (parallel or sequential) ← USE THIS FOR COMPLEX GOALS
 - \`create_kanban_board(title, description, priority, owner)\` — Start a new kanban board for a goal
 - \`list_kanban_boards(owner, status?)\` — List boards for a user
 - \`get_board_status(board_id)\` — Show board details and all tasks
 - \`archive_kanban_board(board_id, summary)\` — Mark board as complete
-- \`create_kanban_task(board_id, title, prompt, priority, depends_on?)\` — Add a task to a board
+- \`create_kanban_task(board_id, title, prompt, priority, task_type, depends_on?)\` — Add one task to a board
 - \`get_kanban_task(task_id)\` — View a single task
 - \`create_sub_task(parent_task_id, title, prompt)\` — Create a child sub-task on the same board
 - \`set_task_status(task_id, status)\` — Override a task's status (ready, running, blocked, cancelled)
 - \`cancel_kanban_task(task_id)\` — Cancel a task
 - \`get_board_progress(board_id)\` — Get completion percentage
+- \`web_search(query)\` — Search the live internet for news, facts, and current events. Always use this first before searching local files for general knowledge or news.
+- \`web_fetch(url)\` — Fetch the text content of a webpage
+- \`learn_from_success(summary)\` — Write to memory/good.md when the user praises an action or you achieve a complex goal successfully.
+- \`learn_from_failure(summary)\` — Write to memory/bad.md when you make a mistake, hit an error, or the user corrects you, so you avoid it in the future.
 
 ## Rules
 - Respond directly for simple requests. No kanban board needed.
-- For complex requests: create a board, break into clear tasks, add each to the board.
-- After creating tasks, tell the user what you've started and that progress will be tracked automatically.
-- Never show agent IDs or internal architecture to the user.
-- Keep responses concise and human-friendly.`
+- For complex requests: create a board, then use fork_tasks to add all tasks at once.
+- After creating tasks, tell the user what you've started in plain language. Never show task IDs.
+- Never reveal agent IDs, task IDs, or internal architecture to the user.
+- Keep responses concise and human-friendly.
+${getMemoryContext()}`
 }
 
 // ── Orchestrator custom tool definitions ──
@@ -164,7 +183,7 @@ const ORCHESTRATOR_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'create_kanban_task',
-      description: 'Add a new task to a kanban board. A specialist agent will pick it up automatically.',
+      description: 'Add a new task to a kanban board. A specialist agent will pick it up automatically. Use task_type to route to the right executor.',
       parameters: {
         type: 'object',
         properties: {
@@ -172,9 +191,14 @@ const ORCHESTRATOR_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           title: { type: 'string', description: 'Short task title' },
           prompt: { type: 'string', description: 'Detailed instructions for the specialist agent' },
           priority: { type: 'number', description: 'Priority 1-5 (default 3)' },
+          task_type: {
+            type: 'string',
+            enum: ['nim', 'opencode'],
+            description: 'Use "opencode" for: writing code, editing files, debugging, refactoring, building. Use "nim" for: research, Q&A, analysis, writing docs, summarizing.',
+          },
           depends_on: { type: 'string', description: 'JSON array of task IDs this depends on' },
         },
-        required: ['board_id', 'title', 'prompt'],
+        required: ['board_id', 'title', 'prompt', 'task_type'],
       },
     },
   },
@@ -252,7 +276,76 @@ const ORCHESTRATOR_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'fork_tasks',
+      description: 'Create multiple tasks at once for a complex goal. Tasks can run in parallel or in sequence. Use this instead of calling create_kanban_task multiple times.',
+      parameters: {
+        type: 'object',
+        properties: {
+          board_id: { type: 'string', description: 'The board ID' },
+          tasks: {
+            type: 'array',
+            description: 'List of tasks to create',
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string', description: 'Short task title' },
+                prompt: { type: 'string', description: 'Detailed instructions for the agent' },
+                task_type: {
+                  type: 'string',
+                  enum: ['nim', 'opencode'],
+                  description: 'nim=fast LLM (research/docs/analysis), opencode=deep coder (file edits/debugging/building)',
+                },
+                depends_on_index: {
+                  type: 'number',
+                  description: '0-based index of another task in this array to wait for before starting. Omit for parallel execution.',
+                },
+              },
+              required: ['title', 'prompt', 'task_type'],
+            },
+          },
+        },
+        required: ['board_id', 'tasks'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'learn_from_success',
+      description: 'Write to memory/good.md when the user praises an action or you achieve a complex goal successfully.',
+      parameters: {
+        type: 'object',
+        properties: {
+          summary: { type: 'string', description: 'Summary of the success' },
+        },
+        required: ['summary'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'learn_from_failure',
+      description: 'Write to memory/bad.md when you make a mistake, hit an error, or the user corrects you, so you avoid it in the future.',
+      parameters: {
+        type: 'object',
+        properties: {
+          summary: { type: 'string', description: 'Summary of the mistake' },
+        },
+        required: ['summary'],
+      },
+    },
+  },
 ]
+
+const webSearchTool = availableTools.find(t => t.function.name === 'web_search')
+const webFetchTool = availableTools.find(t => t.function.name === 'web_fetch')
+if (webSearchTool && webFetchTool) {
+  ORCHESTRATOR_TOOLS.push(webSearchTool, webFetchTool)
+}
 
 // ── Argument validation helpers (exported for testing) ──
 
@@ -297,6 +390,10 @@ export async function executeOrchestratorTool(toolCall: {
 
   try {
     switch (toolCall.name) {
+      case 'web_search':
+      case 'web_fetch':
+        return await executeToolCall({ id: 'dummy', type: 'function', function: toolCall })
+
       case 'create_kanban_board': {
         const title = requireStr(args.title, 'title'); if (!title) return JSON.stringify({ error: missingArg('title') })
         const owner = requireStr(args.owner, 'owner'); if (!owner) return JSON.stringify({ error: missingArg('owner') })
@@ -353,9 +450,27 @@ export async function executeOrchestratorTool(toolCall: {
         const assignee = requireOptStr(args.assignee)
         const priority = requireNum(args.priority) ?? undefined
         const depends_on = requireOptStr(args.depends_on)
-        const id = createKanbanTask(boardId, title, prompt, assignee, priority, depends_on)
-        logger.info({ taskId: id, boardId, title }, 'Task created')
-        return JSON.stringify({ task_id: id, status: 'created' })
+        const taskType = (args.task_type === 'opencode' ? 'opencode' : 'nim') as 'nim' | 'opencode'
+        const id = createKanbanTask(boardId, title, prompt, assignee, priority, depends_on, taskType)
+        logger.info({ taskId: id, boardId, title, taskType }, 'Task created')
+        return JSON.stringify({ task_id: id, status: 'created', task_type: taskType })
+      }
+      case 'fork_tasks': {
+        const boardId = requireStr(args.board_id, 'board_id'); if (!boardId) return JSON.stringify({ error: missingArg('board_id') })
+        if (!Array.isArray(args.tasks) || args.tasks.length === 0) {
+          return JSON.stringify({ error: 'tasks must be a non-empty array' })
+        }
+        const taskIds: string[] = []
+        for (const t of args.tasks as Array<{ title: string; prompt: string; task_type: string; depends_on_index?: number }>) {
+          const dependsOn = (t.depends_on_index !== undefined && taskIds[t.depends_on_index])
+            ? JSON.stringify([taskIds[t.depends_on_index]])
+            : undefined
+          const tType = (t.task_type === 'opencode' ? 'opencode' : 'nim') as 'nim' | 'opencode'
+          const id = createKanbanTask(boardId, t.title, t.prompt, undefined, 3, dependsOn, tType)
+          taskIds.push(id)
+          logger.info({ taskId: id, boardId, title: t.title, taskType: tType }, 'Forked task created')
+        }
+        return JSON.stringify({ task_ids: taskIds, count: taskIds.length, status: 'created' })
       }
       case 'get_kanban_task': {
         const taskId = requireStr(args.task_id, 'task_id'); if (!taskId) return JSON.stringify({ error: missingArg('task_id') })
@@ -397,6 +512,16 @@ export async function executeOrchestratorTool(toolCall: {
         const pct = getBoardProgress(boardId)
         return JSON.stringify({ board_id: boardId, progress_pct: pct })
       }
+      case 'learn_from_success': {
+        const summary = requireStr(args.summary, 'summary'); if (!summary) return JSON.stringify({ error: missingArg('summary') })
+        addGoodMemory(summary)
+        return JSON.stringify({ status: 'success recorded', summary })
+      }
+      case 'learn_from_failure': {
+        const summary = requireStr(args.summary, 'summary'); if (!summary) return JSON.stringify({ error: missingArg('summary') })
+        addBadMemory(summary)
+        return JSON.stringify({ status: 'failure recorded', summary })
+      }
       default:
         return JSON.stringify({ error: `Unknown tool: ${toolCall.name}` })
     }
@@ -413,12 +538,16 @@ export interface OrchestratorOptions {
   messages: AgentMessage[]
   chatId: string
   signal?: AbortSignal
+  failFast?: boolean
 }
 
 export interface OrchestratorResult {
   text: string
+  finalState?: string
   sessionId?: string
 }
+
+import { compressContext } from './context-compressor.js'
 
 export async function runOrchestrator(options: OrchestratorOptions): Promise<OrchestratorResult> {
   const catalog = listAgents().map(a =>
@@ -427,12 +556,36 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<Orc
 
   const systemPrompt = buildSystemPrompt(catalog)
 
+  const rawMessages = options.messages.map(m => ({
+    role: m.role as 'user' | 'assistant' | 'system',
+    content: m.content,
+  }))
+
+  const compressedMessages = compressContext(rawMessages, 4000)
+
+  // ── CEO Chain interception ──
+
+  const lastMsg = options.messages[options.messages.length - 1]?.content || ''
+  const isCeoOrder = classifyComplexity(lastMsg) === 'delegate' && (
+    lastMsg.toLowerCase().includes('ceo') ||
+    lastMsg.toLowerCase().includes('build') ||
+    lastMsg.toLowerCase().includes('create') ||
+    lastMsg.toLowerCase().includes('develop') ||
+    lastMsg.toLowerCase().includes('implement') ||
+    COMPLEX_KEYWORD_REGEX.test(lastMsg)
+  )
+
+  if (isCeoOrder) {
+    const result = await handleCeoOrder(lastMsg, options.chatId)
+    return {
+      text: `🧠 **CEO Chain of Command Activated**\n\n**Plan:**\n${result.plan}\n\n**Status:** ${result.summary}`,
+      sessionId: result.boardId,
+    }
+  }
+
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: 'system', content: systemPrompt },
-    ...options.messages.map(m => ({
-      role: m.role as 'user' | 'assistant' | 'system',
-      content: m.content,
-    })),
+    ...compressedMessages
   ]
 
   const client = getClient()
@@ -445,13 +598,19 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<Orc
   while (turns < maxTurns) {
     turns++
 
-    const completion = await client.chat.completions.create({
+    const completion = await retryOnRateLimit(
       model,
-      messages,
-      tools: ORCHESTRATOR_TOOLS,
-      tool_choice: 'auto',
-      max_tokens: 2048,
-    }, { signal: options.signal })
+      (activeModel) =>
+        client.chat.completions.create({
+          model: activeModel,
+          messages,
+          tools: ORCHESTRATOR_TOOLS,
+          tool_choice: 'auto',
+          max_tokens: 4096,
+        }, { signal: options.signal }),
+      2,
+      options.failFast
+    )
 
     const choice = completion.choices[0]
 
@@ -493,18 +652,57 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<Orc
   return { text: finalText || 'No response generated.', sessionId }
 }
 
+// ── Instant responses (zero-latency, no LLM) ──
+
+const INSTANT_RESPONSES: Array<[RegExp, string]> = [
+  [/^(hi|hello|hey|yo|sup)[\s!?]*$/i, 'Hey! What can I do for you?'],
+  [/^(good morning|good evening|good afternoon)[\s!?]*$/i, 'Hi! How can I help?'],
+  [/^(thanks|thank you|ty|thx|cheers)[\s!?]*$/i, 'No problem! Anything else?'],
+  [/^(bye|goodbye|see ya|see you|later|cya)[\s!?]*$/i, 'Later! 👋'],
+  [/^(ok|okay|k|sure|alright|got it)[\s!?]*$/i, '👍'],
+  [/^(yes|yep|yeah|yup)[\s!?]*$/i, '👍'],
+  [/^(no|nope|nah)[\s!?]*$/i, 'Got it.'],
+]
+
 // ── Direct response for simple requests ──
 
 export async function respondDirect(options: OrchestratorOptions): Promise<OrchestratorResult> {
+  const lastMsg = options.messages[options.messages.length - 1]
+  const text = lastMsg?.content?.trim() ?? ''
+
+  // Zero-latency instant responses — no LLM call needed
+  for (const [pattern, response] of INSTANT_RESPONSES) {
+    if (pattern.test(text)) {
+      return { text: response }
+    }
+  }
+
+  // Stable system prefix (Cacheable)
   const systemPrompt = `You are OpenCode OS, a personal AI assistant. Respond concisely and helpfully. Keep responses brief.`
 
+  const rawMessages = options.messages.map(m => ({
+    role: m.role as 'user' | 'assistant' | 'system',
+    content: m.content,
+  }))
+  
+  // Volatile suffix (Appended to the latest user message to protect the system prompt cache)
+  if (rawMessages.length > 0) {
+    const last = rawMessages[rawMessages.length - 1]
+    if (last.role === 'user') {
+      last.content = `${last.content}\n\n[System Context: Today is ${new Date().toDateString()}]`
+    }
+  }
+
+  const compressedMessages = compressContext(rawMessages, 2000)
+
   const result = await queryAgent({
-    messages: options.messages,
+    messages: compressedMessages as unknown as AgentMessage[], // Cast since compressContext wants AgentMessage
     systemPrompt,
     maxTurns: 3,
     signal: options.signal,
     tools: [],
+    failFast: false,
   })
 
-  return { text: result.text || 'No response generated.' }
+  return { text: result.text || "I'm here. What do you need?" }
 }

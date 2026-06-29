@@ -1,3 +1,5 @@
+import { logger } from './logger.js'
+
 type QueuedTask = () => Promise<void>
 
 const queues = new Map<string, QueuedTask[]>()
@@ -28,7 +30,7 @@ async function processQueue(chatId: string): Promise<void> {
     try {
       await task()
     } catch (err) {
-      console.error(`Queue error for chat ${chatId}:`, err)
+      logger.error({ chatId, err: (err as Error).message }, 'Queue error')
     }
   }
 }

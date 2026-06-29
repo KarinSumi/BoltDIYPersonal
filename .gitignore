@@ -7,4 +7,14 @@ outputs/meet_briefs/
 *.log
 *.pid
 shell/target/
-
+coverage/
+*.tsbuildinfo
+.nyc_output/
+.env.local
+.env.production
+.env.*
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+logs/

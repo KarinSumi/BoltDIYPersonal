@@ -16,7 +16,7 @@ module.exports = {
     merge_logs: true,
     log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
     kill_timeout: 10000,
-    wait_ready: true,
+    wait_ready: false,
     listen_timeout: 30000,
   }]
 }
